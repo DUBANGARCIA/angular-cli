@@ -23,6 +23,12 @@ anchor_1: &defaults
   working_directory: ~/ng
   docker:
     - image: *default_docker_image
+anchor_1_win: &defaults_win
+  working_directory: ~/ng
+  resource_class: windows.medium
+  # shell: powershell.exe -NoProfile -ExecutionPolicy Bypass
+  machine:
+    image: windows-server-2019  
 
 # After checkout, rebase on top of target branch.
 anchor_2: &post_checkout
@@ -38,6 +44,14 @@ anchor_2: &post_checkout
       else
         echo "This build is not over a PR, nothing to do."
       fi
+anchor_2_win: &post_checkout_win
+  run:
+    name: Rebase PR on target branch
+    command: >
+      if (Test-Path env:CIRCLE_PR_NUMBER) {
+        git config user.name "angular-ci"
+        git config user.email "angular-ci"
+        node tools\rebase-pr.js angular/angular-cli $env:CIRCLE_PR_NUMBER }
 anchor_3: &restore_cache
   restore_cache:
     keys:
@@ -46,10 +60,73 @@ anchor_3: &restore_cache
       - angular_devkit-0.7.0-
 anchor_4: &attach_options
   at: .
+anchor_5: &windows_env
+  run:
+    # Need to install node and yarn before, as the base windows image doesn't have anything.
+    name: Setup windows node environment
+    # command: ./.circleci/windows-env.ps1
+    command: choco install nodejs yarn && resetenv && node -v
+      
+
+orbs:
+  win: sandbox/windows-tools@dev:preview
 
 # Job definitions
-version: 2
+version: 2.1
 jobs:
+  # Windows notes:
+  # - tabbing/up/down in ssh sessions doesn't seem to work well.
+  # - see path with `echo $Env:Path`
+  # todo:
+  # - figure out why the `should wrap the bootstrap declaration in a DOMContentLoaded event handler`
+  #   test fails, seems to be some spaces before the `});`
+  # - figure out caching, workspace
+  # - add sharded e2e
+  # - port rest of commands in appveyor config
+  install-win:
+    <<: *defaults_win
+    steps:
+      - checkout
+      - *windows_env
+      # - *post_checkout_win
+      # Both builds below have the same yarn.lock, but different checksums
+      # win https://circleci.com/gh/angular/angular-cli/61502
+      # linux https://circleci.com/gh/angular/angular-cli/61493      
+      - *restore_cache
+      - run: yarn install --frozen-lockfile
+      # - persist_to_workspace:
+      #     root: .
+      #     paths:
+      #       - ./*
+      # - save_cache:
+      #     key: *cache_key
+      #     paths:
+      #       - ~/.cache/yarn
+
+  # test-win:
+  #   <<: *defaults_win
+  #   # Windows executors need pipelines, 
+  #   steps:
+  #     # Can't use workspace from linux directly, "Error extracting tarball"
+  #     # https://circleci.com/gh/angular/angular-cli/61500
+  #     # - attach_workspace: *attach_options
+  #     # Need to install node and yarn before, as the base windows image doesn't have anything.
+  #     - run: choco install nodejs
+  #     - run: choco install yarn
+  #     # Refresh the shell to get node/yarn, choco tells you to do so because the path changed.
+  #     - run: refreshenv
+  #     # But that doesn't seem to work. Maybe it's because CircleCI uses runs commands 
+  #     # via `#!powershell.exe -NoProfile -ExecutionPolicy Bypass`.
+  #     # Add paths for nodejs and yarn manually.
+  #     # Now we have to use a multi-line command to keep the vars.
+  #     # This is bad because multi-line commands don't fail when a step fails.
+  #     # I see in the CircleCI job config the keys added to this config item, one of which is
+  #     # the shell. Maybe I can change that manually to address the path issues.
+  #     - run: |
+  #         $Env:path += ";C:\Program Files\nodejs\;C:\Program Files (x86)\Yarn\bin\;"
+  #         yarn install --frozen-lockfile  
+  #         npm run test -- --full        
+
   install:
     <<: *defaults
     steps:
@@ -114,7 +191,7 @@ jobs:
       - run: PATH=~/.npm-global/bin:$PATH xvfb-run -a node ./tests/legacy-cli/run_e2e --nb-shards=${CIRCLE_NODE_TOTAL} --shard=${CIRCLE_NODE_INDEX}
       - store_artifacts:
           path: /tmp/dist
-          destination: cli/new-production
+          destination: cli/new-production   
 
   e2e-cli-node-12:
     <<: *defaults
@@ -201,70 +278,75 @@ jobs:
           name: Deployment to NPM
           command: |
             npm run admin -- publish --verbose
+             
 
 workflows:
   version: 2
   default_workflow:
     jobs:
-      - install
-      - lint:
-          requires:
-            - install
-      - validate:
-          requires:
-            - install
-      - build:
-          requires:
-            - install
-          filters:
-            branches:
-              ignore:
-              - /docs-preview/
-      - build-bazel:
-          requires:
-            - build
-      - test:
-          requires:
-            - build
-      - test-large:
-          requires:
-            - build
-      - e2e-cli:
-          requires:
-            - build
-      - e2e-cli-node-12:
-          requires:
-            - build
-      - e2e-cli-ivy:
-          requires:
-            - build            
-      - snapshot_publish_docs:
-          requires:
-          - install
-          filters:
-            branches:
-              only:
-              - /docs-preview/
-      - e2e-cli-ng-snapshots:
-          requires:
-            - build
-      - snapshot_publish:
-          requires:
-            - test
-            - build
-            - e2e-cli
-          filters:
-            branches:
-              ignore:
-                - /pull\/.*/
-      - publish:
-          requires:
-            - test
-            - build
-            - e2e-cli
-            - snapshot_publish
-          filters:
-            tags:
-              only: /^v\d+/
-            branches:
-              ignore: /.*/
+      - install-win
+      # - build-win:
+      #     requires:
+      #       - install-win
+      #     filters:
+      #       branches:
+      #         ignore:
+      #         - /docs-preview/
+      # - test-win:
+      #     requires:
+      #       - build-win
+      # - install
+      # - lint:
+      #     requires:
+      #       - install
+      # - validate:
+      #     requires:
+      #       - install
+      # - build:
+      #     requires:
+      #       - install
+      #     filters:
+      #       branches:
+      #         ignore:
+      #         - /docs-preview/
+      # - build-bazel:
+      #     requires:
+      #       - build
+      # - test:
+      #     requires:
+      #       - build
+      # - test-large:
+      #     requires:
+      #       - build
+      # - e2e-cli:
+      #     requires:
+      #       - build
+      # - e2e-cli-node-12:
+      #     requires:
+      #       - build
+      # - e2e-cli-ivy:
+      #     requires:
+      #       - build            
+      # - e2e-cli-ng-snapshots:
+      #     requires:
+      #       - build
+      # - snapshot_publish:
+      #     requires:
+      #       - test
+      #       - build
+      #       - e2e-cli
+      #     filters:
+      #       branches:
+      #         ignore:
+      #           - /pull\/.*/
+      # - publish:
+      #     requires:
+      #       - test
+      #       - build
+      #       - e2e-cli
+      #       - snapshot_publish
+      #     filters:
+      #       tags:
+      #         only: /^v\d+/
+      #       branches:
+      #         ignore: /.*/
