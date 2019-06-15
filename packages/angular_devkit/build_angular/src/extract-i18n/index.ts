@@ -20,6 +20,7 @@ import {
   getStatsConfig,
   getStylesConfig,
 } from '../angular-cli-files/models/webpack-configs';
+import { readTsconfig } from '../angular-cli-files/utilities/read-tsconfig';
 import { statsErrorsToString, statsWarningsToString } from '../angular-cli-files/utilities/stats';
 import { Schema as BrowserBuilderOptions } from '../browser/schema';
 import { Version } from '../utils/version';
@@ -58,6 +59,15 @@ async function execute(options: ExtractI18nBuilderOptions, context: BuilderConte
     await context.getBuilderNameForTarget(browserTarget),
   );
 
+  // FIXME: i18n is not yet implemented in Ivy
+  // We should display a warning and exit gracefully.
+  const { options: compilerOptions } = readTsconfig(browserOptions.tsConfig, context.workspaceRoot);
+  if (compilerOptions.enableIvy) {
+    context.logger.warn('We are sorry but i18n is not yet implemented in Ivy.');
+
+    return { success: true };
+  }
+
   // We need to determine the outFile name so that AngularCompiler can retrieve it.
   let outFile = options.outFile || getI18nOutfile(options.i18nFormat);
   if (options.outputPath) {
@@ -72,6 +82,7 @@ async function execute(options: ExtractI18nBuilderOptions, context: BuilderConte
         scripts: false,
         styles: false,
       },
+      buildOptimizer: false,
       i18nLocale: options.i18nLocale,
       i18nFormat: options.i18nFormat,
       i18nFile: outFile,
