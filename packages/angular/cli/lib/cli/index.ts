@@ -6,43 +6,45 @@
  * found in the LICENSE file at https://angular.io/license
  */
 import { createConsoleLogger } from '@angular-devkit/core/node';
-import * as colors from 'ansi-colors';
-import { WriteStream } from 'tty';
+import { normalize } from 'path';
 import { format } from 'util';
 import { runCommand } from '../../models/command-runner';
+import { colors, supportsColor } from '../../utilities/color';
 import { getWorkspaceRaw } from '../../utilities/config';
 import { getWorkspaceDetails } from '../../utilities/project';
 
-export default async function(options: { testing?: boolean, cliArgs: string[] }) {
-  // Typings do not contain the function call (added in Node.js v9.9.0)
-  const supportsColor = process.stdout instanceof WriteStream &&
-    (process.stdout as unknown as { getColorDepth(): number }).getColorDepth() > 1;
-
-  const logger = createConsoleLogger(
-    false,
-    process.stdout,
-    process.stderr,
-    {
-      info: s => supportsColor ? s : colors.unstyle(s),
-      debug: s => supportsColor ? s : colors.unstyle(s),
-      warn: s => supportsColor ? colors.bold.yellow(s) : colors.unstyle(s),
-      error: s => supportsColor ? colors.bold.red(s) : colors.unstyle(s),
-      fatal: s => supportsColor ? colors.bold.red(s) : colors.unstyle(s),
-    },
-  );
+// tslint:disable: no-console
+export default async function(options: { testing?: boolean; cliArgs: string[] }) {
+  const logger = createConsoleLogger(false, process.stdout, process.stderr, {
+    info: s => (supportsColor ? s : colors.unstyle(s)),
+    debug: s => (supportsColor ? s : colors.unstyle(s)),
+    warn: s => (supportsColor ? colors.bold.yellow(s) : colors.unstyle(s)),
+    error: s => (supportsColor ? colors.bold.red(s) : colors.unstyle(s)),
+    fatal: s => (supportsColor ? colors.bold.red(s) : colors.unstyle(s)),
+  });
 
   // Redirect console to logger
-  console.log = function() { logger.info(format.apply(null, arguments)); };
-  console.info = function() { logger.info(format.apply(null, arguments)); };
-  console.warn = function() { logger.warn(format.apply(null, arguments)); };
-  console.error = function() { logger.error(format.apply(null, arguments)); };
+  console.log = function() {
+    logger.info(format.apply(null, arguments));
+  };
+  console.info = function() {
+    logger.info(format.apply(null, arguments));
+  };
+  console.warn = function() {
+    logger.warn(format.apply(null, arguments));
+  };
+  console.error = function() {
+    logger.error(format.apply(null, arguments));
+  };
 
   let projectDetails = getWorkspaceDetails();
   if (projectDetails === null) {
     const [, localPath] = getWorkspaceRaw('local');
     if (localPath !== null) {
-      logger.fatal(`An invalid configuration file was found ['${localPath}'].`
-                 + ' Please delete the file before running the command.');
+      logger.fatal(
+        `An invalid configuration file was found ['${localPath}'].` +
+          ' Please delete the file before running the command.',
+      );
 
       return 1;
     }
@@ -65,19 +67,19 @@ export default async function(options: { testing?: boolean, cliArgs: string[] })
         const fs = await import('fs');
         const os = await import('os');
         const tempDirectory = fs.mkdtempSync(fs.realpathSync(os.tmpdir()) + '/' + 'ng-');
-        const logPath = tempDirectory + '/angular-errors.log';
+        const logPath = normalize(tempDirectory + '/angular-errors.log');
         fs.appendFileSync(logPath, '[error] ' + (err.stack || err));
 
         logger.fatal(
           `An unhandled exception occurred: ${err.message}\n` +
-          `See "${logPath}" for further details.\n\n` +
-          'Please report with the contents of the log file at ' +
-          'https://github.com/angular/angular-cli/issues/new?template=1-bug-report.md',
+            `See "${logPath}" for further details.\n\n` +
+            'Please report with the contents of the log file at ' +
+            'https://github.com/angular/angular-cli/issues/new?template=1-bug-report.md',
         );
       } catch (e) {
         logger.fatal(
           `An unhandled exception occurred: ${err.message}\n` +
-          `Fatal error writing debug log file: ${e.message}`,
+            `Fatal error writing debug log file: ${e.message}`,
         );
         if (err.stack) {
           logger.fatal(err.stack);
@@ -94,6 +96,7 @@ export default async function(options: { testing?: boolean, cliArgs: string[] })
     }
 
     if (options.testing) {
+      // tslint:disable-next-line: no-debugger
       debugger;
       throw err;
     }

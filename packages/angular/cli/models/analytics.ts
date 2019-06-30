@@ -5,7 +5,7 @@
  * Use of this source code is governed by an MIT-style license that can be
  * found in the LICENSE file at https://angular.io/license
  */
-import { analytics, json, tags, terminal } from '@angular-devkit/core';
+import { analytics, json, tags } from '@angular-devkit/core';
 import * as child_process from 'child_process';
 import * as debug from 'debug';
 import { writeFileSync } from 'fs';
@@ -13,13 +13,37 @@ import * as inquirer from 'inquirer';
 import * as os from 'os';
 import * as ua from 'universal-analytics';
 import { v4 as uuidV4 } from 'uuid';
+import { colors } from '../utilities/color';
 import { getWorkspace, getWorkspaceRaw } from '../utilities/config';
 import { isTTY } from '../utilities/tty';
 
-const analyticsDebug = debug('ng:analytics');  // Generate analytics, including settings and users.
-const analyticsLogDebug = debug('ng:analytics:log');  // Actual logs of events.
+// tslint:disable: no-console
+const analyticsDebug = debug('ng:analytics'); // Generate analytics, including settings and users.
+const analyticsLogDebug = debug('ng:analytics:log'); // Actual logs of events.
 
-const BYTES_PER_MEGABYTES = 1024 * 1024;
+const BYTES_PER_GIGABYTES = 1024 * 1024 * 1024;
+
+let _defaultAngularCliPropertyCache: string;
+export const AnalyticsProperties = {
+  AngularCliProd: 'UA-8594346-29',
+  AngularCliStaging: 'UA-8594346-32',
+  get AngularCliDefault(): string {
+    if (_defaultAngularCliPropertyCache) {
+      return _defaultAngularCliPropertyCache;
+    }
+
+    const v = require('../package.json').version;
+
+    // The logic is if it's a full version then we should use the prod GA property.
+    if (/^\d+\.\d+\.\d+$/.test(v) && v !== '0.0.0') {
+      _defaultAngularCliPropertyCache = AnalyticsProperties.AngularCliProd;
+    } else {
+      _defaultAngularCliPropertyCache = AnalyticsProperties.AngularCliStaging;
+    }
+
+    return _defaultAngularCliPropertyCache;
+  },
+};
 
 /**
  * This is the ultimate safelist for checking if a package name is safe to report to analytics.
@@ -43,7 +67,6 @@ export function isPackageNameSafeForAnalytics(name: string) {
   });
 }
 
-
 /**
  * Attempt to get the Windows Language Code string.
  * @private
@@ -56,7 +79,10 @@ function _getWindowsLanguageCode(): string | undefined {
   try {
     // This is true on Windows XP, 7, 8 and 10 AFAIK. Would return empty string or fail if it
     // doesn't work.
-    return child_process.execSync('wmic.exe os get locale').toString().trim();
+    return child_process
+      .execSync('wmic.exe os get locale')
+      .toString()
+      .trim();
   } catch (_) {}
 
   return undefined;
@@ -68,11 +94,13 @@ function _getWindowsLanguageCode(): string | undefined {
  */
 function _getLanguage() {
   // Note: Windows does not expose the configured language by default.
-  return process.env.LANG  // Default Unix env variable.
-      || process.env.LC_CTYPE  // For C libraries. Sometimes the above isn't set.
-      || process.env.LANGSPEC  // For Windows, sometimes this will be set (not always).
-      || _getWindowsLanguageCode()
-      || '??';  // ¯\_(ツ)_/¯
+  return (
+    process.env.LANG || // Default Unix env variable.
+    process.env.LC_CTYPE || // For C libraries. Sometimes the above isn't set.
+    process.env.LANGSPEC || // For Windows, sometimes this will be set (not always).
+    _getWindowsLanguageCode() ||
+    '??'
+  ); // ¯\_(ツ)_/¯
 }
 
 /**
@@ -102,8 +130,8 @@ function _getCpuSpeed() {
  * @private
  */
 function _getRamSize() {
-  // Report in megabytes. Otherwise it's too much noise.
-  return Math.floor(os.totalmem() / BYTES_PER_MEGABYTES);
+  // Report in gigabytes (or closest). Otherwise it's too much noise.
+  return Math.round(os.totalmem() / BYTES_PER_GIGABYTES);
 }
 
 /**
@@ -113,9 +141,10 @@ function _getRamSize() {
 function _getNodeVersion() {
   // We use any here because p.release is a new Node construct in Node 10 (and our typings are the
   // minimal version of Node we support).
-  const p = process as any;  // tslint:disable-line:no-any
-  const name = typeof p.release == 'object' && typeof p.release.name == 'string' && p.release.name
-          || process.argv0;
+  const p = process as any; // tslint:disable-line:no-any
+  const name =
+    (typeof p.release == 'object' && typeof p.release.name == 'string' && p.release.name) ||
+    process.argv0;
 
   return name + ' ' + process.version;
 }
@@ -128,9 +157,8 @@ function _getNumericNodeVersion() {
   const p = process.version;
   const m = p.match(/\d+\.\d+/);
 
-  return m && m[0] && parseFloat(m[0]) || 0;
+  return (m && m[0] && parseFloat(m[0])) || 0;
 }
-
 
 // These are just approximations of UA strings. We just try to fool Google Analytics to give us the
 // data we want.
@@ -164,7 +192,6 @@ const osVersionMap: { [os: string]: { [release: string]: string } } = {
     '5.1.2600': 'Windows XP',
   },
 };
-
 
 /**
  * Build a fake User Agent string for OSX. This gets sent to Analytics so it shows the proper OS,
@@ -226,7 +253,6 @@ function _buildUserAgentString() {
   }
 }
 
-
 /**
  * Implementation of the Analytics interface for using `universal-analytics` package.
  */
@@ -262,7 +288,7 @@ export class UniversalAnalytics implements analytics.Analytics {
     // We set custom metrics for values we care about.
     this._dimensions[analytics.NgCliAnalyticsDimensions.CpuCount] = _getCpuCount();
     this._dimensions[analytics.NgCliAnalyticsDimensions.CpuSpeed] = _getCpuSpeed();
-    this._dimensions[analytics.NgCliAnalyticsDimensions.RamInMegabytes] = _getRamSize();
+    this._dimensions[analytics.NgCliAnalyticsDimensions.RamInGigabytes] = _getRamSize();
     this._dimensions[analytics.NgCliAnalyticsDimensions.NodeVersion] = _getNumericNodeVersion();
   }
 
@@ -272,10 +298,10 @@ export class UniversalAnalytics implements analytics.Analytics {
    */
   private _customVariables(options: analytics.CustomDimensionsAndMetricsOptions) {
     const additionals: { [key: string]: boolean | number | string } = {};
-    this._dimensions.forEach((v, i) => additionals['cd' + i] = v);
-    (options.dimensions || []).forEach((v, i) => additionals['cd' + i] = v);
-    this._metrics.forEach((v, i) => additionals['cm' + i] = v);
-    (options.metrics || []).forEach((v, i) => additionals['cm' + i] = v);
+    this._dimensions.forEach((v, i) => (additionals['cd' + i] = v));
+    (options.dimensions || []).forEach((v, i) => (additionals['cd' + i] = v));
+    this._metrics.forEach((v, i) => (additionals['cm' + i] = v));
+    (options.metrics || []).forEach((v, i) => (additionals['cm' + i] = v));
 
     return additionals;
   }
@@ -382,9 +408,14 @@ export async function promptGlobalAnalytics(force = false) {
         Thank you for sharing anonymous usage data. If you change your mind, the following
         command will disable this feature entirely:
 
-            ${terminal.yellow('ng analytics off')}
+            ${colors.yellow('ng analytics off')}
       `);
       console.log('');
+    } else {
+      // Send back a ping with the user `optout`. This is the only thing we send.
+      const ua = new UniversalAnalytics(AnalyticsProperties.AngularCliDefault, 'optout');
+      ua.pageview('/telemetry/optout');
+      await ua.flush();
     }
 
     return true;
@@ -431,9 +462,14 @@ export async function promptProjectAnalytics(force = false): Promise<boolean> {
         Thank you for sharing anonymous usage data. Would you change your mind, the following
         command will disable this feature entirely:
 
-            ${terminal.yellow('ng analytics project off')}
+            ${colors.yellow('ng analytics project off')}
       `);
       console.log('');
+    } else {
+      // Send back a ping with the user `optout`. This is the only thing we send.
+      const ua = new UniversalAnalytics(AnalyticsProperties.AngularCliDefault, 'optout');
+      ua.pageview('/telemetry/project/optout');
+      await ua.flush();
     }
 
     return true;
@@ -445,9 +481,8 @@ export async function promptProjectAnalytics(force = false): Promise<boolean> {
 export function hasGlobalAnalyticsConfiguration(): boolean {
   try {
     const globalWorkspace = getWorkspace('global');
-    const analyticsConfig: string | undefined | null | { uid?: string } = globalWorkspace
-      && globalWorkspace.getCli()
-      && globalWorkspace.getCli()['analytics'];
+    const analyticsConfig: string | undefined | null | { uid?: string } =
+      globalWorkspace && globalWorkspace.getCli() && globalWorkspace.getCli()['analytics'];
 
     if (analyticsConfig !== null && analyticsConfig !== undefined) {
       return true;
@@ -465,7 +500,7 @@ export function hasGlobalAnalyticsConfiguration(): boolean {
  */
 export function getGlobalAnalytics(): UniversalAnalytics | undefined {
   analyticsDebug('getGlobalAnalytics');
-  const propertyId = 'UA-8594346-29';
+  const propertyId = AnalyticsProperties.AngularCliDefault;
 
   if ('NG_CLI_ANALYTICS' in process.env) {
     if (process.env['NG_CLI_ANALYTICS'] == 'false' || process.env['NG_CLI_ANALYTICS'] == '') {
@@ -483,9 +518,8 @@ export function getGlobalAnalytics(): UniversalAnalytics | undefined {
   // If anything happens we just keep the NOOP analytics.
   try {
     const globalWorkspace = getWorkspace('global');
-    const analyticsConfig: string | undefined | null | { uid?: string } = globalWorkspace
-      && globalWorkspace.getCli()
-      && globalWorkspace.getCli()['analytics'];
+    const analyticsConfig: string | undefined | null | { uid?: string } =
+      globalWorkspace && globalWorkspace.getCli() && globalWorkspace.getCli()['analytics'];
     analyticsDebug('Client Analytics config found: %j', analyticsConfig);
 
     if (analyticsConfig === false) {
@@ -521,7 +555,6 @@ export function getGlobalAnalytics(): UniversalAnalytics | undefined {
   }
 }
 
-
 /**
  * Return the usage analytics sharing setting, which is either a property string (GA-XXXXXXX-XX),
  * or undefined if no sharing.
@@ -541,9 +574,8 @@ export function getSharedAnalytics(): UniversalAnalytics | undefined {
   // If anything happens we just keep the NOOP analytics.
   try {
     const globalWorkspace = getWorkspace('global');
-    const analyticsConfig = globalWorkspace
-      && globalWorkspace.getCli()
-      && globalWorkspace.getCli()['analyticsSharing'];
+    const analyticsConfig =
+      globalWorkspace && globalWorkspace.getCli() && globalWorkspace.getCli()['analyticsSharing'];
 
     if (!analyticsConfig || !analyticsConfig.tracking || !analyticsConfig.uuid) {
       return undefined;
