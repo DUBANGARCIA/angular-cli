@@ -20,6 +20,7 @@ const dev = Math.floor(Math.random() * 10000);
 
 export class WebpackCompilerHost implements ts.CompilerHost {
   private _syncHost: virtualFs.SyncDelegateHost;
+  private _innerMemoryHost: virtualFs.SimpleMemoryHost;
   private _memoryHost: virtualFs.SyncDelegateHost;
   private _changedFiles = new Set<string>();
   private _readResourceFiles = new Set<string>();
@@ -31,9 +32,12 @@ export class WebpackCompilerHost implements ts.CompilerHost {
     '.js.map',
     '.ngfactory.js',
     '.ngfactory.js.map',
-    '.ngstyle.js',
-    '.ngstyle.js.map',
     '.ngsummary.json',
+  ];
+
+  private _virtualStyleFileExtensions = [
+    '.shim.ngstyle.js',
+    '.shim.ngstyle.js.map',
   ];
 
   constructor(
@@ -43,14 +47,24 @@ export class WebpackCompilerHost implements ts.CompilerHost {
     private readonly cacheSourceFiles: boolean,
     private readonly directTemplateLoading = false,
     private readonly ngccProcessor?: NgccProcessor,
+    private readonly moduleResolutionCache?: ts.ModuleResolutionCache,
   ) {
     this._syncHost = new virtualFs.SyncDelegateHost(host);
-    this._memoryHost = new virtualFs.SyncDelegateHost(new virtualFs.SimpleMemoryHost());
+    this._innerMemoryHost = new virtualFs.SimpleMemoryHost();
+    this._memoryHost = new virtualFs.SyncDelegateHost(this._innerMemoryHost);
     this._basePath = normalize(basePath);
   }
 
   private get virtualFiles(): Path[] {
     return [...((this._memoryHost.delegate as {}) as { _cache: Map<Path, {}> })._cache.keys()];
+  }
+
+  reset() {
+    this._innerMemoryHost.reset();
+    this._changedFiles.clear();
+    this._readResourceFiles.clear();
+    this._sourceFileCache.clear();
+    this._resourceLoader = undefined;
   }
 
   denormalizePath(path: string) {
@@ -110,6 +124,10 @@ export class WebpackCompilerHost implements ts.CompilerHost {
       });
     }
 
+    if (fullPath.endsWith('.ts')) {
+      return;
+    }
+
     // In case resolveJsonModule and allowJs we also need to remove virtual emitted files
     // both if they exists or not.
     if (
@@ -118,6 +136,15 @@ export class WebpackCompilerHost implements ts.CompilerHost {
     ) {
       if (this._memoryHost.exists(fullPath)) {
         this._memoryHost.delete(fullPath);
+      }
+
+      return;
+    }
+
+    for (const ext of this._virtualStyleFileExtensions) {
+      const virtualFile = (fullPath + ext) as Path;
+      if (this._memoryHost.exists(virtualFile)) {
+        this._memoryHost.delete(virtualFile);
       }
     }
   }
@@ -389,6 +416,7 @@ export class WebpackCompilerHost implements ts.CompilerHost {
         workaroundResolve(containingFile),
         this._options,
         this,
+        this.moduleResolutionCache,
       );
 
       if (this._options.enableIvy && resolvedModule && this.ngccProcessor) {

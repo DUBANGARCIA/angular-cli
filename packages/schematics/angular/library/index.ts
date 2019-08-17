@@ -124,7 +124,7 @@ function addDependenciesToPackageJson() {
   };
 }
 
-function addAppToWorkspaceFile(
+function addLibToWorkspaceFile(
   options: LibraryOptions,
   projectRoot: string,
   projectName: string,
@@ -139,13 +139,18 @@ function addAppToWorkspaceFile(
       root: projectRoot,
       sourceRoot: `${projectRoot}/src`,
       projectType: ProjectType.Library,
-      prefix: options.prefix || 'lib',
+      prefix: options.prefix,
       targets: {
         build: {
           builder: Builders.NgPackagr,
           options: {
             tsConfig: `${projectRoot}/tsconfig.lib.json`,
             project: `${projectRoot}/ng-package.json`,
+          },
+          configurations: {
+            production: {
+              tsConfig: `${projectRoot}/tsconfig.lib.prod.json`,
+            },
           },
         },
         test: {
@@ -178,7 +183,7 @@ export default function (options: LibraryOptions): Rule {
     if (!options.name) {
       throw new SchematicsException(`Invalid options, "name" is required.`);
     }
-    const prefix = options.prefix || 'lib';
+    const prefix = options.prefix;
 
     validateProjectName(options.name);
 
@@ -199,7 +204,6 @@ export default function (options: LibraryOptions): Rule {
     const folderName = `${scopeFolder}${strings.dasherize(options.name)}`;
     const projectRoot = join(normalize(newProjectRoot), folderName);
     const distRoot = `dist/${folderName}`;
-
     const sourceDir = `${projectRoot}/src/lib`;
 
     const templateSource = apply(url('./files'), [
@@ -219,7 +223,7 @@ export default function (options: LibraryOptions): Rule {
 
     return chain([
       mergeWith(templateSource),
-      addAppToWorkspaceFile(options, projectRoot, projectName),
+      addLibToWorkspaceFile(options, projectRoot, projectName),
       options.skipPackageJson ? noop() : addDependenciesToPackageJson(),
       options.skipTsConfig ? noop() : updateTsConfig(packageName, distRoot),
       schematic('module', {

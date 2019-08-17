@@ -21,7 +21,6 @@ export interface HashFormat {
 }
 
 export function getOutputHashFormat(option: string, length = 20): HashFormat {
-  /* tslint:disable:max-line-length */
   const hashFormats: { [option: string]: HashFormat } = {
     none: { chunk: '', extract: '', file: '', script: '' },
     media: { chunk: '', extract: '', file: `.[hash:${length}]`, script: '' },
@@ -38,7 +37,6 @@ export function getOutputHashFormat(option: string, length = 20): HashFormat {
       script: `.[hash:${length}]`,
     },
   };
-  /* tslint:enable:max-line-length */
   return hashFormats[option] || hashFormats['none'];
 }
 
@@ -95,7 +93,12 @@ export function getSourceMapDevTool(
   return new SourceMapDevToolPlugin({
     filename: inlineSourceMap ? undefined : '[file].map',
     include,
-    moduleFilenameTemplate: '[namespace]/[resource-path]',
+    // We want to set sourceRoot to  `webpack:///` for non
+    // inline sourcemaps as otherwise paths to sourcemaps will be broken in browser
+    // `webpack:///` is needed for Visual Studio breakpoints to work properly as currently
+    // there is no way to set the 'webRoot'
+    sourceRoot: inlineSourceMap ? '' : 'webpack:///',
+    moduleFilenameTemplate: '[resource-path]',
     append: hiddenSourceMap ? false : undefined,
   });
 }

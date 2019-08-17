@@ -194,7 +194,7 @@ function addAppToWorkspaceFile(options: ApplicationOptions, appDir: string): Rul
           main: `${sourceRoot}/main.ts`,
           polyfills: `${sourceRoot}/polyfills.ts`,
           tsConfig: `${projectRoot}tsconfig.app.json`,
-          aot: !!options.enableIvy,
+          aot: true,
           assets: [
             `${sourceRoot}/favicon.ico`,
             `${sourceRoot}/assets`,
@@ -219,10 +219,16 @@ function addAppToWorkspaceFile(options: ApplicationOptions, appDir: string): Rul
             extractLicenses: true,
             vendorChunk: false,
             buildOptimizer: true,
-            budgets: [{
+            budgets: [
+            {
               type: 'initial',
               maximumWarning: '2mb',
               maximumError: '5mb',
+            },
+            {
+              type: 'anyComponentStyle',
+              maximumWarning: '6kb',
+              maximumError: '10kb',
             }],
           },
         },
@@ -300,7 +306,6 @@ export default function (options: ApplicationOptions): Rule {
       throw new SchematicsException(`Invalid options, "name" is required.`);
     }
     validateProjectName(options.name);
-    options.prefix = options.prefix || 'app';
     const appRootSelector = `${options.prefix}-root`;
     const componentOptions: Partial<ComponentOptions> = !options.minimal ?
       {

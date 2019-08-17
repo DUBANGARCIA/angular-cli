@@ -1,17 +1,15 @@
 {
-  "extends": "../tsconfig.json",
+  "extends": "./tsconfig.app.json",
   "compilerOptions": {
     "outDir": "../dist-server",
     "baseUrl": "./",
     "module": "commonjs",
     "types": []
   },
-  "exclude": [
-    "test.ts",
-    "**/*.spec.ts"
+  "files": [
+    "main.server.ts"
   ],
   "angularCompilerOptions": {
-    "entryModule": "app/app.server.module#AppServerModule",
-    "enableIvy": true
+    "entryModule": "app/app.server.module#AppServerModule"
   }
 }

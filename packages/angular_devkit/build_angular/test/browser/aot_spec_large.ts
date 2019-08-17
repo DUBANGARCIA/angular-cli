@@ -7,7 +7,7 @@
  */
 
 import { Architect } from '@angular-devkit/architect';
-import { join, normalize, virtualFs } from '@angular-devkit/core';
+import { join, logging, normalize, virtualFs } from '@angular-devkit/core';
 import { BrowserBuilderOutput } from '../../src/browser';
 import { createArchitect, host, ivyEnabled } from '../utils';
 
@@ -37,6 +37,58 @@ describe('Browser Builder AOT', () => {
       expect(content).toMatch(/platformBrowser.*bootstrapModuleFactory.*AppModuleNgFactory/);
     }
 
+    await run.stop();
+  });
+
+  it('shows warnings for component styles', async () => {
+    const overrides = {
+      aot: true,
+      optimization: true,
+    };
+
+    host.writeMultipleFiles({
+      'src/app/app.component.css': `
+        .foo { color: white; padding: 1px; };
+        .buz { color: white; padding: 2px; };
+      `,
+    });
+
+    const logger = new logging.Logger('');
+    const logs: string[] = [];
+    logger.subscribe(e => logs.push(e.message));
+
+    const run = await architect.scheduleTarget(targetSpec, overrides, { logger });
+    const output = await run.result;
+    expect(output.success).toBe(true);
+    expect(logs.join()).toContain('WARNING in Invalid selector');
+    await run.stop();
+  });
+
+  it('shows error when component stylesheet contains SCSS syntax error', async () => {
+    const overrides = {
+      aot: true,
+    };
+
+    host.replaceInFile(
+      'src/app/app.component.ts',
+      'app.component.css',
+      'app.component.scss',
+    );
+
+    host.writeMultipleFiles({
+      'src/app/app.component.scss': `
+        .foo {
+      `,
+    });
+
+    const logger = new logging.Logger('');
+    const logs: string[] = [];
+    logger.subscribe(e => logs.push(e.message));
+
+    const run = await architect.scheduleTarget(targetSpec, overrides, { logger });
+    const output = await run.result;
+    expect(output.success).toBe(false);
+    expect(logs.join()).toContain(`Expected "}".`);
     await run.stop();
   });
 });

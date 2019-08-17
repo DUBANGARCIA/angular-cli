@@ -12,7 +12,6 @@ import { createAppModule } from '../utility/test';
 import { Schema as WorkspaceOptions } from '../workspace/schema';
 import { ChangeDetection, Schema as ComponentOptions, Style } from './schema';
 
-// tslint:disable:max-line-length
 describe('Component Schematic', () => {
   const schematicRunner = new SchematicTestRunner(
     '@schematics/angular',
@@ -48,7 +47,7 @@ describe('Component Schematic', () => {
   };
   let appTree: UnitTestTree;
   beforeEach(async () => {
-    appTree = schematicRunner.runSchematic('workspace', workspaceOptions);
+    appTree = await schematicRunner.runSchematicAsync('workspace', workspaceOptions).toPromise();
     appTree = await schematicRunner
       .runSchematicAsync('application', appOptions, appTree)
       .toPromise();
@@ -168,7 +167,7 @@ describe('Component Schematic', () => {
     const options = { ...defaultOptions, module: '/projects/bar/src/app.moduleXXX.ts' };
     let thrownError: Error | null = null;
     try {
-      schematicRunner.runSchematic('component', options, appTree);
+      await schematicRunner.runSchematicAsync('component', options, appTree).toPromise();
     } catch (err) {
       thrownError = err;
     }
@@ -273,7 +272,6 @@ describe('Component Schematic', () => {
     const tree = await schematicRunner.runSchematicAsync('component', options, appTree).toPromise();
     const content = tree.readContent('/projects/bar/src/app/app.module.ts');
     expect(content).toMatch(
-      // tslint:disable-next-line:max-line-length
       /import { TestComponentComponent } from '\.\/dir\/test-component\/test-component.component'/,
     );
   });
@@ -288,7 +286,6 @@ describe('Component Schematic', () => {
 
     const content = appTree.readContent('/projects/bar/src/app/admin/module/module.module.ts');
     expect(content).toMatch(
-      // tslint:disable-next-line:max-line-length
       /import { TestComponentComponent } from '..\/..\/other\/test-component\/test-component.component'/,
     );
   });

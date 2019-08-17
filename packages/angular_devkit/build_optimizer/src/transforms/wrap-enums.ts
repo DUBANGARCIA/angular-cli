@@ -56,7 +56,7 @@ function visitBlockStatements(
           return node;
       }
     } else {
-      return ts.visitEachChild(node, visitor, context);
+      return node;
     }
   };
 
@@ -112,7 +112,7 @@ function visitBlockStatements(
             oIndex++;
           }
 
-          const enumStatements = findStatements(name, statements, oIndex + 1);
+          const enumStatements = findStatements(name, statements, oIndex, 1);
           if (!enumStatements) {
             continue;
           }
@@ -262,7 +262,7 @@ function findTs2_3EnumIife(
       || !ts.isBinaryExpression(statement.expression)
       || !ts.isElementAccessExpression(statement.expression.left)
     ) {
-      return null
+      return null;
     }
 
     const leftExpression = statement.expression.left.expression;
@@ -316,6 +316,7 @@ function findStatements(
   name: string,
   statements: ts.NodeArray<ts.Statement>,
   statementIndex: number,
+  offset = 0,
 ): ts.Statement[] | undefined {
   let count = 1;
 
@@ -369,7 +370,7 @@ function findStatements(
   }
 
   if (count > 1) {
-    return statements.slice(statementIndex, statementIndex + count);
+    return statements.slice(statementIndex + offset, statementIndex + count);
   }
 
   return undefined;

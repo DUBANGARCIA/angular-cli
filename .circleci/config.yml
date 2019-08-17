@@ -60,7 +60,7 @@ executors:
 # https://circleci.com/docs/2.0/reusing-config/#authoring-reusable-commands
 commands:
   setup_windows:
-    steps:     
+    steps:
       - checkout
       - run:
           # Need to install node and yarn before, as the base windows image doesn't have anything.
@@ -212,11 +212,44 @@ jobs:
             PATH=~/.npm-global/bin:$PATH npm install --global npm
       - run: PATH=~/.npm-global/bin:$PATH node ./tests/legacy-cli/run_e2e --nb-shards=${CIRCLE_NODE_TOTAL} --shard=${CIRCLE_NODE_INDEX}
 
+  test-browsers:
+    executor:
+      name: test-executor
+    environment:
+      E2E_BROWSERS: true
+    steps:
+      - attach_workspace: *attach_options
+      - run:
+          name: Initialize Environment
+          command: ./.circleci/env.sh
+      - run:
+          name: Initialize Saucelabs
+          command: setSecretVar SAUCE_ACCESS_KEY $(echo $SAUCE_ACCESS_KEY | rev)
+      - run:
+          name: Start Saucelabs Tunnel
+          command: ./scripts/saucelabs/start-tunnel.sh
+          background: true
+        # Waits for the Saucelabs tunnel to be ready. This ensures that we don't run tests
+        # too early without Saucelabs not being ready.
+      - run: ./scripts/saucelabs/wait-for-tunnel.sh
+      - run: PATH=~/.npm-global/bin:$PATH node ./tests/legacy-cli/run_e2e ./tests/legacy-cli/e2e/tests/misc/browsers.ts
+      - run: ./scripts/saucelabs/stop-tunnel.sh
+
   build:
     executor: action-executor
     steps:
       - attach_workspace: *attach_options
       - run: yarn build
+
+  # This is where we put all the misbehaving and flaky tests so we can fine-tune their conditions 
+  # and rerun them faster.
+  flake-jail:
+    executor: action-executor
+    steps:
+      - attach_workspace: *attach_options
+      - run: yarn webdriver-update
+      - run: yarn test-large --full --flakey
+      - run: yarn test-large --full --flakey --ivy=true
 
   build-bazel:
     executor: action-executor
@@ -317,7 +350,7 @@ workflows:
       - test-large:
           name: test-large-ivy
           ivy: true
-          glob: "packages/angular_devkit/build_angular/test/browser/*_spec_large.ts"
+          glob: "packages/angular_devkit/@(build_angular|build_ng_packagr)/@(src|test)/@(build|browser)/*_spec_large.ts"
           requires:
             - build
       - e2e-cli:
@@ -335,9 +368,30 @@ workflows:
       - e2e-cli:
           name: e2e-cli-ng-snapshots
           snapshots: true
-          <<: *ignore_pull_requests
           requires:
             - e2e-cli
+          pre-steps:
+            - run:
+                name: Don't run expensive e2e snapshots tests for forks other than renovate-bot and angular
+                command: >
+                  if [[ "$CIRCLE_PR_USERNAME" != "renovate-bot" ]] &&
+                    [[ "$CIRCLE_PROJECT_USERNAME" != "angular" || $CIRCLE_BRANCH != "master" ]]; then
+                    circleci step halt
+                  fi
+      - e2e-cli:
+          name: e2e-cli-ng-ivy-snapshots
+          snapshots: true
+          ivy: true
+          requires:
+            - e2e-cli
+          pre-steps:
+            - run:
+                name: Don't run expensive e2e snapshots tests for forks other than renovate-bot and angular
+                command: >
+                  if [[ "$CIRCLE_PR_USERNAME" != "renovate-bot" ]] &&
+                    [[ "$CIRCLE_PROJECT_USERNAME" != "angular" || $CIRCLE_BRANCH != "master" ]]; then
+                    circleci step halt
+                  fi
       - e2e-cli-node-10:
           <<: *ignore_pull_requests
           requires:
@@ -346,6 +400,12 @@ workflows:
           <<: *ignore_pull_requests
           requires:
             - e2e-cli
+      - test-browsers:
+          requires:
+            - build
+      - flake-jail:
+          requires:
+            - build
       - snapshot_publish:
           <<: *ignore_pull_requests
           requires:

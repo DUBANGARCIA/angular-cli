@@ -8,14 +8,15 @@
 // tslint:disable:no-big-function
 import { Architect } from '@angular-devkit/architect';
 import { TestLogger } from '@angular-devkit/architect/testing';
-import { logging, normalize, virtualFs } from '@angular-devkit/core';
+import { join, logging, normalize, virtualFs } from '@angular-devkit/core';
 import { debounceTime, take, takeWhile, tap } from 'rxjs/operators';
 import {
   createArchitect,
   host,
   ivyEnabled,
   lazyModuleFiles,
-  lazyModuleStringImport,
+  lazyModuleFnImport,
+  outputPath,
 } from '../utils';
 
 describe('Browser Builder rebuilds', () => {
@@ -76,6 +77,7 @@ describe('Browser Builder rebuilds', () => {
     const run = await architect.scheduleTarget(target, overrides);
     await run.output
       .pipe(
+        debounceTime(1000),
         tap(result => {
           expect(result.success).toBe(true, 'build should succeed');
           const hasLazyChunk = host.scopedSync().exists(normalize('dist/lazy-lazy-module.js'));
@@ -84,7 +86,7 @@ describe('Browser Builder rebuilds', () => {
               // No lazy chunk should exist.
               if (!hasLazyChunk) {
                 phase = 2;
-                host.writeMultipleFiles({ ...lazyModuleFiles, ...lazyModuleStringImport });
+                host.writeMultipleFiles({ ...lazyModuleFiles, ...lazyModuleFnImport });
               }
               break;
 
@@ -126,7 +128,7 @@ describe('Browser Builder rebuilds', () => {
     const run = await architect.scheduleTarget(target, overrides);
     await run.output
       .pipe(
-        debounceTime(500),
+        debounceTime(1000),
         tap(buildEvent => expect(buildEvent.success).toBe(true)),
         tap(() => host.appendToFile('src/app/app.component.css', ':host { color: blue; }')),
         take(2),
@@ -475,6 +477,66 @@ describe('Browser Builder rebuilds', () => {
         take(2),
       )
       .toPromise();
+    await run.stop();
+  });
+
+  it('rebuilds AOT on CSS changes', async () => {
+    const overrides = { watch: true, aot: true };
+
+    let buildCount = 1;
+    const run = await architect.scheduleTarget(target, overrides);
+    await run.output.pipe(
+      debounceTime(1000),
+      tap(() => {
+        const content = virtualFs.fileBufferToString(
+          host.scopedSync().read(join(outputPath, 'main.js')),
+        );
+
+        switch (buildCount) {
+          case 1:
+              expect(content).not.toContain('color: green');
+              host.appendToFile('src/app/app.component.css', 'h1 { color: green; }');
+              break;
+          case 2:
+              expect(content).toContain('color: green');
+              break;
+        }
+
+        buildCount++;
+      }),
+      tap((buildEvent) => expect(buildEvent.success).toBe(true)),
+      take(2),
+    ).toPromise();
+    await run.stop();
+  });
+
+  it('rebuilds AOT on HTML changes', async () => {
+    const overrides = { watch: true, aot: true };
+
+    let buildCount = 1;
+    const run = await architect.scheduleTarget(target, overrides);
+    await run.output.pipe(
+      debounceTime(1000),
+      tap(() => {
+        const content = virtualFs.fileBufferToString(
+          host.scopedSync().read(join(outputPath, 'main.js')),
+        );
+
+        switch (buildCount) {
+          case 1:
+              expect(content).not.toContain('New Updated Content');
+              host.appendToFile('src/app/app.component.html', 'New Updated Content');
+              break;
+          case 2:
+              expect(content).toContain('New Updated Content');
+              break;
+        }
+
+        buildCount++;
+      }),
+      tap((buildEvent) => expect(buildEvent.success).toBe(true)),
+      take(2),
+    ).toPromise();
     await run.stop();
   });
 });

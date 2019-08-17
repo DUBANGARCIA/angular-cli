@@ -10,21 +10,17 @@ import { WorkspaceNodeModulesArchitectHost } from '@angular-devkit/architect/nod
 import { TestProjectHost, TestingArchitectHost } from '@angular-devkit/architect/testing';
 import {
   Path,
-  experimental,
   getSystemPath,
   join,
   json,
   normalize,
   schema,
   virtualFs,
+  workspaces,
 } from '@angular-devkit/core';
 import { BrowserBuilderOutput } from '../src/browser';
 
 export const ivyEnabled = process.argv.includes('--ivy');
-if (ivyEnabled) {
-  // tslint:disable-next-line:no-console
-  console.warn('********* IVY Enabled ***********');
-}
 
 const devkitRoot = normalize((global as any)._DevKitRoot); // tslint:disable-line:no-any
 export const workspaceRoot = join(
@@ -46,7 +42,10 @@ export async function createArchitect(workspaceRoot: Path) {
   registry.addPostTransform(schema.transforms.addUndefinedDefaults);
   const workspaceSysPath = getSystemPath(workspaceRoot);
 
-  const workspace = await experimental.workspace.Workspace.fromPath(host, host.root(), registry);
+  const { workspace } = await workspaces.readWorkspace(
+    workspaceSysPath,
+    workspaces.createWorkspaceHost(host),
+  );
   const architectHost = new TestingArchitectHost(
     workspaceSysPath,
     workspaceSysPath,

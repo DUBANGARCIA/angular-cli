@@ -46,7 +46,7 @@ const open = require('open');
 
 export type DevServerBuilderOptions = Schema & json.JsonObject;
 
-export const devServerBuildOverriddenKeys: (keyof DevServerBuilderOptions)[] = [
+const devServerBuildOverriddenKeys: (keyof DevServerBuilderOptions)[] = [
   'watch',
   'optimization',
   'aot',
@@ -315,19 +315,17 @@ export function buildServerConfig(
     host: serverOptions.host,
     port: serverOptions.port,
     headers: { 'Access-Control-Allow-Origin': '*' },
-    historyApiFallback:
-      !!browserOptions.index &&
-      ({
-        index: `${servePath}/${getIndexOutputFile(browserOptions)}`,
-        disableDotRule: true,
-        htmlAcceptHeaders: ['text/html', 'application/xhtml+xml'],
-        rewrites: [
-          {
-            from: new RegExp(`^(?!${servePath})/.*`),
-            to: context => url.format(context.parsedUrl),
-          },
-        ],
-      } as WebpackDevServer.HistoryApiFallbackConfig),
+    historyApiFallback: !!browserOptions.index && {
+      index: `${servePath}/${getIndexOutputFile(browserOptions)}`,
+      disableDotRule: true,
+      htmlAcceptHeaders: ['text/html', 'application/xhtml+xml'],
+      rewrites: [
+        {
+          from: new RegExp(`^(?!${servePath})/.*`),
+          to: context => url.format(context.parsedUrl),
+        },
+      ],
+    },
     stats: false,
     compress: styles || scripts,
     watchOptions: {
@@ -407,6 +405,20 @@ function _addLiveReload(
     webpackConfig.plugins = [];
   }
 
+  // Enable the internal node plugins but no individual shims
+  // This is needed to allow module specific rules to include node shims
+  // Only needed in dev server mode to support live reload capabilities in all package managers
+  if (webpackConfig.node === false) {
+    webpackConfig.node = {
+      global: false,
+      process: false,
+      __filename: false,
+      __dirname: false,
+      Buffer: false,
+      setImmediate: false,
+    };
+  }
+
   // This allows for live reload of page when changes are made to repo.
   // https://webpack.js.org/configuration/dev-server/#devserver-inline
   let webpackDevServerPath;
@@ -420,8 +432,8 @@ function _addLiveReload(
   // This adds it back so that behavior is consistent when using a custom URL path
   let sockjsPath = '';
   if (clientAddress.pathname) {
-      clientAddress.pathname = path.posix.join(clientAddress.pathname, 'sockjs-node');
-      sockjsPath = '&sockPath=' + clientAddress.pathname;
+    clientAddress.pathname = path.posix.join(clientAddress.pathname, 'sockjs-node');
+    sockjsPath = '&sockPath=' + clientAddress.pathname;
   }
 
   const entryPoints = [`${webpackDevServerPath}?${url.format(clientAddress)}${sockjsPath}`];
@@ -451,7 +463,7 @@ function _addLiveReload(
     }
   }
   if (typeof webpackConfig.entry !== 'object' || Array.isArray(webpackConfig.entry)) {
-    webpackConfig.entry = {} as webpack.Entry;
+    webpackConfig.entry = {};
   }
   if (!Array.isArray(webpackConfig.entry.main)) {
     webpackConfig.entry.main = [];

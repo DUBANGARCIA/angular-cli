@@ -33,9 +33,9 @@ ts_library(
     deps = [
         "@npm//rxjs",
         "@npm//@types/node",
-        "@npm//@types/source-map",
         "@npm//ajv",
         "@npm//magic-string",
+        "@npm//source-map",
         # @typings: es2015.core
         # @typings: es2015.symbol.wellknown
         # @typings: es2016.array.include
@@ -125,6 +125,8 @@ ts_library(
 jasmine_node_test(
     name = "node_test",
     srcs = [":node_test_lib"],
+    # TODO: Audit tests to determine if tests can be run in RBE environments
+    local = True,
     deps = [
         "@npm//chokidar",
         "@npm//jasmine",

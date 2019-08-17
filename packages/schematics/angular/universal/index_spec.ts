@@ -53,7 +53,7 @@ describe('Universal Schematic', () => {
   let appTree: UnitTestTree;
 
   beforeEach(async () => {
-    appTree = schematicRunner.runSchematic('workspace', workspaceOptions);
+    appTree = await schematicRunner.runSchematicAsync('workspace', workspaceOptions).toPromise();
     appTree = await schematicRunner.runSchematicAsync(
       'application',
       initialWorkspaceAppOptions,
@@ -90,7 +90,11 @@ describe('Universal Schematic', () => {
       extends: './tsconfig.app.json',
       compilerOptions: {
         outDir: './out-tsc/app-server',
+        module: 'commonjs',
       },
+      files: [
+        'src/main.server.ts',
+      ],
       angularCompilerOptions: {
         entryModule: './src/app/app.server.module#AppServerModule',
       },
@@ -110,7 +114,11 @@ describe('Universal Schematic', () => {
       extends: './tsconfig.app.json',
       compilerOptions: {
         outDir: '../../out-tsc/app-server',
+        module: 'commonjs',
       },
+      files: [
+        'src/main.server.ts',
+      ],
       angularCompilerOptions: {
         entryModule: './src/app/app.server.module#AppServerModule',
       },

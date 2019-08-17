@@ -31,6 +31,7 @@ const standardCommands = {
   'add': '../commands/add.json',
   'analytics': '../commands/analytics.json',
   'build': '../commands/build.json',
+  'deploy': '../commands/deploy.json',
   'config': '../commands/config.json',
   'doc': '../commands/doc.json',
   'e2e': '../commands/e2e.json',
@@ -58,8 +59,8 @@ export interface CommandMapOptions {
  * @private
  */
 async function _createAnalytics(): Promise<analytics.Analytics> {
-  const config = getGlobalAnalytics();
-  const maybeSharedAnalytics = getSharedAnalytics();
+  const config = await getGlobalAnalytics();
+  const maybeSharedAnalytics = await getSharedAnalytics();
 
   if (config && maybeSharedAnalytics) {
     return new analytics.MultiAnalytics([config, maybeSharedAnalytics]);
