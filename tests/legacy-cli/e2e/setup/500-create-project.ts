@@ -22,14 +22,16 @@ export default async function() {
     await expectFileToExist(join(process.cwd(), 'test-project'));
     process.chdir('./test-project');
 
-    if (!argv['ivy']) {
+    if (argv['ve']) {
       await updateJsonFile('tsconfig.json', config => {
         config.angularCompilerOptions.enableIvy = false;
       });
 
       // In VE non prod builds are non AOT by default
       await updateJsonFile('angular.json', config => {
-        config.projects['test-project'].architect.build.options.aot = false;
+        const build = config.projects['test-project'].architect.build;
+        build.options.aot = false;
+        build.configurations.production.aot = true;
       });
     }
   }

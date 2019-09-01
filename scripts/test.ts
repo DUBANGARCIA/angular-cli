@@ -23,6 +23,8 @@ const knownFlakes = [
   // Rebuild tests in test-large are flakey if not run as the first suite.
   // https://github.com/angular/angular-cli/pull/15204
   'packages/angular_devkit/build_angular/test/browser/rebuild_spec_large.ts',
+  // This is flaky with NGCC
+  'packages/angular_devkit/build_angular/test/karma/selected_spec_large.ts',
 ];
 
 const projectBaseDir = join(__dirname, '..');
@@ -89,9 +91,9 @@ export default function(args: ParsedArgs, logger: logging.Logger) {
   const specGlob = args.large ? '*_spec_large.ts' : '*_spec.ts';
   const regex = args.glob ? args.glob : `packages/**/${specGlob}`;
 
-  if (args['ivy']) {
+  if (args['ve']) {
     // tslint:disable-next-line:no-console
-    console.warn('********* IVY Enabled ***********');
+    console.warn('********* VE Enabled ***********');
   }
 
   if (args.large) {

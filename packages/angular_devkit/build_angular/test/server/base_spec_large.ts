@@ -10,7 +10,7 @@ import { Architect } from '@angular-devkit/architect';
 import { getSystemPath, join, normalize, virtualFs } from '@angular-devkit/core';
 import { take, tap } from 'rxjs/operators';
 import { BrowserBuilderOutput } from '../../src/browser';
-import { createArchitect, host } from '../utils';
+import { createArchitect, host, veEnabled } from '../utils';
 
 
 describe('Server Builder', () => {
@@ -32,7 +32,12 @@ describe('Server Builder', () => {
 
     const fileName = join(outputPath, 'main.js');
     const content = virtualFs.fileBufferToString(host.scopedSync().read(normalize(fileName)));
-    expect(content).toMatch(/AppServerModuleNgFactory/);
+
+    if (veEnabled) {
+      expect(content).toMatch(/AppServerModuleNgFactory/);
+    } else {
+      expect(content).toMatch(/AppServerModule\.ngModuleDef/);
+    }
 
     await run.stop();
   });
@@ -67,16 +72,10 @@ describe('Server Builder', () => {
 
   it('supports sourcemaps', async () => {
     const overrides = { sourceMap: true };
-
     const run = await architect.scheduleTarget(target, overrides);
     const output = await run.result as BrowserBuilderOutput;
     expect(output.success).toBe(true);
-
-    const fileName = join(outputPath, 'main.js');
-    const content = virtualFs.fileBufferToString(host.scopedSync().read(normalize(fileName)));
-    expect(content).toMatch(/AppServerModuleNgFactory/);
     expect(host.scopedSync().exists(join(outputPath, 'main.js.map'))).toBeTruthy();
-
     await run.stop();
   });
 
@@ -143,7 +142,11 @@ describe('Server Builder', () => {
 
         const fileName = join(outputPath, 'main.js');
         const content = virtualFs.fileBufferToString(host.scopedSync().read(normalize(fileName)));
-        expect(content).toMatch(/AppServerModuleNgFactory/);
+        if (veEnabled) {
+          expect(content).toMatch(/AppServerModuleNgFactory/);
+        } else {
+          expect(content).toMatch(/AppServerModule\.ngModuleDef/);
+        }
       }),
       take(1),
     ).toPromise();
