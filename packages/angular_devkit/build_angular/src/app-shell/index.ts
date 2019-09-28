@@ -11,11 +11,10 @@ import {
   createBuilder,
   targetFromTargetString,
 } from '@angular-devkit/architect';
-import { JsonObject, experimental, join, normalize, resolve, schema } from '@angular-devkit/core';
+import { JsonObject, join, normalize, resolve, schema } from '@angular-devkit/core';
 import { NodeJsSyncHost } from '@angular-devkit/core/node';
 import * as fs from 'fs';
 import * as path from 'path';
-import { readTsconfig } from '../angular-cli-files/utilities/read-tsconfig';
 import { augmentAppWithServiceWorker } from '../angular-cli-files/utilities/service-worker';
 import { BrowserBuilderOutput } from '../browser';
 import { Schema as BrowserBuilderSchema } from '../browser/schema';
@@ -42,30 +41,37 @@ async function _renderUniversal(
     browserBuilderName,
   );
 
-  // Determine if browser app was compiled using Ivy.
-  const { options: compilerOptions } = readTsconfig(browserOptions.tsConfig, context.workspaceRoot);
-  const ivy = compilerOptions.enableIvy;
-
   // Initialize zone.js
   const zonePackage = require.resolve('zone.js', { paths: [root] });
   await import(zonePackage);
 
+  const {
+    AppServerModule,
+    AppServerModuleNgFactory,
+    renderModule,
+    renderModuleFactory,
+  } = await import(serverBundlePath);
+
+  let renderModuleFn: (module: unknown, options: {}) => Promise<string>;
+  let AppServerModuleDef: unknown;
+
+  if (renderModuleFactory && AppServerModuleNgFactory) {
+    renderModuleFn = renderModuleFactory;
+    AppServerModuleDef = AppServerModuleNgFactory;
+  } else if (renderModule && AppServerModule) {
+    renderModuleFn = renderModule;
+    AppServerModuleDef = AppServerModule;
+  } else {
+    throw new Error(`renderModule method and/or AppServerModule were not exported from: ${serverBundlePath}.`);
+  }
+
   // Load platform server module renderer
-  const platformServerPackage = require.resolve('@angular/platform-server', { paths: [root] });
   const renderOpts = {
     document: indexHtml,
     url: options.route,
   };
 
-  // Render app to HTML using Ivy or VE
-  const html = await import(platformServerPackage)
-    // tslint:disable-next-line:no-implicit-dependencies
-    .then((m: typeof import('@angular/platform-server')) =>
-      ivy
-        ? m.renderModule(require(serverBundlePath).AppServerModule, renderOpts)
-        : m.renderModuleFactory(require(serverBundlePath).AppServerModuleNgFactory, renderOpts),
-    );
-
+  const html = await renderModuleFn(AppServerModuleDef, renderOpts);
   // Overwrite the client index file.
   const outputIndexPath = options.outputIndexPath
     ? path.join(root, options.outputIndexPath)
@@ -75,21 +81,17 @@ async function _renderUniversal(
 
   if (browserOptions.serviceWorker) {
     const host = new NodeJsSyncHost();
-    // Create workspace.
-    const registry = new schema.CoreSchemaRegistry();
-    registry.addPostTransform(schema.transforms.addUndefinedDefaults);
 
-    const workspace = await experimental.workspace.Workspace.fromPath(
-      host,
-      normalize(context.workspaceRoot),
-      registry,
-    );
-    const projectName = context.target ? context.target.project : workspace.getDefaultProjectName();
-
+    const projectName = context.target && context.target.project;
     if (!projectName) {
-      throw new Error('Must either have a target from the context or a default project.');
+      throw new Error('The builder requires a target.');
     }
-    const projectRoot = resolve(workspace.root, normalize(workspace.getProject(projectName).root));
+
+    const projectMetadata = await context.getProjectMetadata(projectName);
+    const projectRoot = resolve(
+      normalize(context.workspaceRoot),
+      normalize((projectMetadata.root as string) || ''),
+    );
 
     await augmentAppWithServiceWorker(
       host,

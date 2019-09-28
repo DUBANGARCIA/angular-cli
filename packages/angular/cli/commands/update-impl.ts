@@ -20,16 +20,17 @@ import { getPackageManager } from '../utilities/package-manager';
 import {
   PackageIdentifier,
   PackageManifest,
+  PackageMetadata,
   fetchPackageMetadata,
 } from '../utilities/package-metadata';
-import {
-  PackageTreeActual,
-  findNodeDependencies,
-  readPackageTree,
-} from '../utilities/package-tree';
+import { PackageTreeNode, findNodeDependencies, readPackageTree } from '../utilities/package-tree';
 import { Schema as UpdateCommandSchema } from './update';
 
-const npa = require('npm-package-arg');
+const npa = require('npm-package-arg') as (selector: string) => PackageIdentifier;
+const pickManifest = require('npm-pick-manifest') as (
+  metadata: PackageMetadata,
+  selector: string,
+) => PackageManifest;
 
 const oldConfigFileNames = ['.angular-cli.json', 'angular-cli.json'];
 
@@ -139,6 +140,7 @@ export class UpdateCommand extends Command<UpdateCommandSchema> {
       const description = schematic.description as typeof schematic.description & {
         version?: string;
       };
+      description.version = coerceVersionNumber(description.version) || undefined;
       if (!description.version) {
         continue;
       }
@@ -190,7 +192,7 @@ export class UpdateCommand extends Command<UpdateCommandSchema> {
     const packages: PackageIdentifier[] = [];
     for (const request of options['--'] || []) {
       try {
-        const packageIdentifier: PackageIdentifier = npa(request);
+        const packageIdentifier = npa(request);
 
         // only registry identifiers are supported
         if (!packageIdentifier.registry) {
@@ -273,8 +275,19 @@ export class UpdateCommand extends Command<UpdateCommandSchema> {
 
     this.logger.info(`Found ${Object.keys(rootDependencies).length} dependencies.`);
 
-    if (options.all || packages.length === 0) {
-      // Either update all packages or show status
+    if (options.all) {
+      // 'all' option and a zero length packages have already been checked.
+      // Add all direct dependencies to be updated
+      for (const dep of Object.keys(rootDependencies)) {
+        const packageIdentifier = npa(dep);
+        if (options.next) {
+          packageIdentifier.fetchSpec = 'next';
+        }
+
+        packages.push(packageIdentifier);
+      }
+    } else if (packages.length === 0) {
+      // Show status
       const { success } = await this.executeSchematic('@schematics/update', 'update', {
         force: options.force || false,
         next: options.next || false,
@@ -311,26 +324,26 @@ export class UpdateCommand extends Command<UpdateCommandSchema> {
       }
 
       const packageName = packages[0].name;
-      let packageNode = rootDependencies[packageName];
-      if (typeof packageNode === 'string') {
+      const packageDependency = rootDependencies[packageName];
+      let packageNode = packageDependency && packageDependency.node;
+      if (packageDependency && !packageNode) {
         this.logger.error('Package found in package.json but is not installed.');
 
         return 1;
-      } else if (!packageNode) {
+      } else if (!packageDependency) {
         // Allow running migrations on transitively installed dependencies
         // There can technically be nested multiple versions
         // TODO: If multiple, this should find all versions and ask which one to use
         const child = packageTree.children.find(c => c.name === packageName);
         if (child) {
-          // A link represents a symlinked package so use the actual in this case
-          packageNode = child.isLink ? child.target : child;
+          packageNode = child;
         }
+      }
 
-        if (!packageNode) {
-          this.logger.error('Package is not installed.');
+      if (!packageNode) {
+        this.logger.error('Package is not installed.');
 
-          return 1;
-        }
+        return 1;
       }
 
       const updateMetadata = packageNode.package['ng-update'];
@@ -399,12 +412,12 @@ export class UpdateCommand extends Command<UpdateCommandSchema> {
 
     const requests: {
       identifier: PackageIdentifier;
-      node: PackageTreeActual | string;
+      node: PackageTreeNode;
     }[] = [];
 
     // Validate packages actually are part of the workspace
     for (const pkg of packages) {
-      const node = rootDependencies[pkg.name];
+      const node = rootDependencies[pkg.name] && rootDependencies[pkg.name].node;
       if (!node) {
         this.logger.error(`Package '${pkg.name}' is not a dependency.`);
 
@@ -412,11 +425,7 @@ export class UpdateCommand extends Command<UpdateCommandSchema> {
       }
 
       // If a specific version is requested and matches the installed version, skip.
-      if (
-        pkg.type === 'version' &&
-        typeof node === 'object' &&
-        node.package.version === pkg.fetchSpec
-      ) {
+      if (pkg.type === 'version' && node.package.version === pkg.fetchSpec) {
         this.logger.info(`Package '${pkg.name}' is already at '${pkg.fetchSpec}'.`);
         continue;
       }
@@ -450,18 +459,34 @@ export class UpdateCommand extends Command<UpdateCommandSchema> {
       // Try to find a package version based on the user requested package specifier
       // registry specifier types are either version, range, or tag
       let manifest: PackageManifest | undefined;
-      if (requestIdentifier.type === 'version') {
-        manifest = metadata.versions.get(requestIdentifier.fetchSpec);
-      } else if (requestIdentifier.type === 'range') {
-        const maxVersion = semver.maxSatisfying(
-          Array.from(metadata.versions.keys()),
-          requestIdentifier.fetchSpec,
-        );
-        if (maxVersion) {
-          manifest = metadata.versions.get(maxVersion);
+      if (
+        requestIdentifier.type === 'version' ||
+        requestIdentifier.type === 'range' ||
+        requestIdentifier.type === 'tag'
+      ) {
+        try {
+          manifest = pickManifest(metadata, requestIdentifier.fetchSpec);
+        } catch (e) {
+          if (e.code === 'ETARGET') {
+            // If not found and next was used and user did not provide a specifier, try latest.
+            // Package may not have a next tag.
+            if (
+              requestIdentifier.type === 'tag' &&
+              requestIdentifier.fetchSpec === 'next' &&
+              !requestIdentifier.rawSpec
+            ) {
+              try {
+                manifest = pickManifest(metadata, 'latest');
+              } catch (e) {
+                if (e.code !== 'ETARGET' && e.code !== 'ENOVERSIONS') {
+                  throw e;
+                }
+              }
+            }
+          } else if (e.code !== 'ENOVERSIONS') {
+            throw e;
+          }
         }
-      } else if (requestIdentifier.type === 'tag') {
-        manifest = metadata.tags[requestIdentifier.fetchSpec];
       }
 
       if (!manifest) {
@@ -472,10 +497,7 @@ export class UpdateCommand extends Command<UpdateCommandSchema> {
         return 1;
       }
 
-      if (
-        (typeof node === 'string' && manifest.version === node) ||
-        (typeof node === 'object' && manifest.version === node.package.version)
-      ) {
+      if (manifest.version === node.package.version) {
         this.logger.info(`Package '${packageName}' is already up to date.`);
         continue;
       }
@@ -492,7 +514,36 @@ export class UpdateCommand extends Command<UpdateCommandSchema> {
       force: options.force || false,
       packageManager,
       packages: packagesToUpdate,
+      migrateExternal: true,
     });
+
+    if (success && !options.skipCommits) {
+      this.createCommit('Angular CLI update\n' + packagesToUpdate.join('\n'), []);
+    }
+
+    // This is a temporary workaround to allow data to be passed back from the update schematic
+    // tslint:disable-next-line: no-any
+    const migrations = (global as any).externalMigrations as {
+      package: string;
+      collection: string;
+      from: string;
+      to: string;
+    }[];
+
+    if (success && migrations) {
+      for (const migration of migrations) {
+        const result = await this.executeMigrations(
+          migration.package,
+          migration.collection,
+          new semver.Range('>' + migration.from + ' <=' + migration.to),
+          !options.skipCommits,
+        );
+
+        if (!result) {
+          return 0;
+        }
+      }
+    }
 
     return success ? 0 : 1;
   }
@@ -539,7 +590,11 @@ export class UpdateCommand extends Command<UpdateCommandSchema> {
   }
 }
 
-function coerceVersionNumber(version: string): string | null {
+function coerceVersionNumber(version: string | undefined): string | null {
+  if (!version) {
+    return null;
+  }
+
   if (!version.match(/^\d{1,30}\.\d{1,30}\.\d{1,30}/)) {
     const match = version.match(/^\d{1,30}(\.\d{1,30})*/);
 

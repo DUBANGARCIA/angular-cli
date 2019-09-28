@@ -6,7 +6,6 @@
  * found in the LICENSE file at https://angular.io/license
  */
 import { experimental, json, workspaces } from '@angular-devkit/core';
-import { resolve } from '@angular-devkit/core/node';
 import * as path from 'path';
 import { BuilderInfo } from '../src';
 import { Schema as BuilderSchema } from '../src/builders-schema';
@@ -56,11 +55,8 @@ export class WorkspaceNodeModulesArchitectHost implements ArchitectHost<NodeModu
       throw new Error('No builder name specified.');
     }
 
-    const packageJsonPath = resolve(packageName, {
-      basedir: this._root,
-      checkLocal: true,
-      checkGlobal: true,
-      resolvePackageJson: true,
+    const packageJsonPath = require.resolve(packageName + '/package.json', {
+      paths: [this._root],
     });
 
     const packageJson = require(packageJsonPath);
@@ -115,6 +111,29 @@ export class WorkspaceNodeModulesArchitectHost implements ArchitectHost<NodeModu
       ...targetSpec['options'],
       ...(target.configuration ? targetSpec['configurations'][target.configuration] : 0),
     };
+  }
+
+  async getProjectMetadata(target: Target | string): Promise<json.JsonObject | null> {
+    const projectName = typeof target === 'string' ? target : target.project;
+
+    // NOTE: Remove conditional when deprecated support for experimental workspace API is removed.
+    if ('getProject' in this._workspace) {
+      return this._workspace.getProject(projectName) as unknown as json.JsonObject;
+    } else {
+      const projectDefinition = this._workspace.projects.get(projectName);
+      if (!projectDefinition) {
+        throw new Error('Project does not exist.');
+      }
+
+      const metadata = {
+        root: projectDefinition.root,
+        sourceRoot: projectDefinition.sourceRoot,
+        prefix: projectDefinition.prefix,
+        ...projectDefinition.extensions,
+      } as unknown as json.JsonObject;
+
+      return metadata;
+    }
   }
 
   async loadBuilder(info: NodeModulesBuilderInfo): Promise<Builder> {

@@ -7,6 +7,7 @@
  */
 import { SchematicTestRunner, UnitTestTree } from '@angular-devkit/schematics/testing';
 import { Schema as ApplicationOptions, Style } from '../application/schema';
+import { NodeDependencyType, addPackageJsonDependency } from '../utility/dependencies';
 import { Schema as WorkspaceOptions } from '../workspace/schema';
 import { Schema as UniversalOptions } from './schema';
 
@@ -91,6 +92,7 @@ describe('Universal Schematic', () => {
       compilerOptions: {
         outDir: './out-tsc/app-server',
         module: 'commonjs',
+        types: ['node'],
       },
       files: [
         'src/main.server.ts',
@@ -115,6 +117,7 @@ describe('Universal Schematic', () => {
       compilerOptions: {
         outDir: '../../out-tsc/app-server',
         module: 'commonjs',
+        types: ['node'],
       },
       files: [
         'src/main.server.ts',
@@ -225,4 +228,25 @@ describe('Universal Schematic', () => {
     expect(tree.exists(filePath)).toEqual(true);
   });
 
+  it(`should not add import to '@angular/localize' in main file when it's not a depedency`, async () => {
+    const tree = await schematicRunner.runSchematicAsync('universal', defaultOptions, appTree)
+      .toPromise();
+    const filePath = '/projects/bar/src/main.server.ts';
+    const contents = tree.readContent(filePath);
+    expect(contents).not.toContain('@angular/localize');
+  });
+
+  it(`should add import to '@angular/localize' in main file when it's a depedency`, async () => {
+    addPackageJsonDependency(appTree, {
+       name: '@angular/localize',
+       type: NodeDependencyType.Default,
+       version: 'latest',
+    });
+
+    const tree = await schematicRunner.runSchematicAsync('universal', defaultOptions, appTree)
+      .toPromise();
+    const filePath = '/projects/bar/src/main.server.ts';
+    const contents = tree.readContent(filePath);
+    expect(contents).toContain('@angular/localize/init');
+  });
 });

@@ -49,22 +49,20 @@ function updateConfigFile(options: UniversalOptions, tsConfigDirectory: Path): R
         fileReplacements = buildTarget.configurations.production.fileReplacements;
       }
 
+      const mainPath = options.main as string;
       clientProject.targets.add({
         name: 'server',
         builder: Builders.Server,
         options: {
           outputPath: `dist/${options.clientProject}-server`,
-          main: join(normalize(clientProject.root), 'src/main.server.ts'),
+          main: join(normalize(clientProject.root), 'src', mainPath.endsWith('.ts') ? mainPath : mainPath + '.ts'),
           tsConfig: join(tsConfigDirectory, `${options.tsconfigFileName}.json`),
         },
         configurations: {
           production: {
             fileReplacements,
             sourceMap: false,
-            optimization: {
-              scripts: false,
-              styles: true,
-            },
+            optimization: true,
           },
         },
       });
@@ -252,6 +250,7 @@ export default function (options: UniversalOptions): Rule {
         ...strings,
         ...options as object,
         stripTsExtension: (s: string) => s.replace(/\.ts$/, ''),
+        hasLocalizePackage: !!getPackageJsonDependency(host, '@angular/localize'),
       }),
       move(join(normalize(clientProject.root), 'src')),
     ]);

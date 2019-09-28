@@ -17,9 +17,9 @@ export function updateDependencies() {
       '@angular-devkit/build-ng-packagr': latestVersions.DevkitBuildNgPackagr,
       '@angular-devkit/build-webpack': latestVersions.DevkitBuildWebpack,
       'zone.js': latestVersions.ZoneJs,
-      tsickle: latestVersions.tsickle,
       'ng-packagr': latestVersions.ngPackagr,
       'web-animations-js': '^2.3.2',
+      'codelyzer': '^5.1.2',
     };
 
     for (const [name, version] of Object.entries(dependenciesToUpdate)) {
