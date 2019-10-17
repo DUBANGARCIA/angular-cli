@@ -9,13 +9,13 @@
 import { logging } from '@angular-devkit/core';
 import { spawn } from 'child_process';
 import { colors } from '../utilities/color';
+import { NgAddSaveDepedency } from '../utilities/package-metadata';
 
 export default async function(
   packageName: string,
   logger: logging.Logger,
   packageManager: string,
-  projectRoot: string,
-  save = true,
+  save: NgAddSaveDepedency = true,
 ) {
   const installArgs: string[] = [];
   switch (packageManager) {
@@ -42,7 +42,12 @@ export default async function(
   }
 
   if (!save) {
+    // IMP: yarn doesn't have a no-save option
     installArgs.push('--no-save');
+  }
+
+  if (save === 'devDependencies') {
+    installArgs.push(packageManager === 'yarn' ? '--dev' : '--save-dev');
   }
 
   installArgs.push('--quiet');

@@ -25,7 +25,7 @@ import {
 } from 'webpack';
 import { RawSource } from 'webpack-sources';
 import { AssetPatternClass, ExtraEntryPoint } from '../../../browser/schema';
-import { BuildBrowserFeatures, fullDifferential } from '../../../utils';
+import { BuildBrowserFeatures } from '../../../utils';
 import { manglingDisabled } from '../../../utils/mangle-options';
 import { BundleBudgetPlugin } from '../../plugins/bundle-budget';
 import { CleanCssWebpackPlugin } from '../../plugins/cleancss-webpack-plugin';
@@ -40,8 +40,6 @@ const ProgressPlugin = require('webpack/lib/ProgressPlugin');
 const CircularDependencyPlugin = require('circular-dependency-plugin');
 const TerserPlugin = require('terser-webpack-plugin');
 
-// tslint:disable-next-line:no-any
-const g: any = typeof global !== 'undefined' ? global : {};
 
 // tslint:disable-next-line:no-big-function
 export function getCommonConfig(wco: WebpackConfigOptions): Configuration {
@@ -64,7 +62,7 @@ export function getCommonConfig(wco: WebpackConfigOptions): Configuration {
   const entryPoints: { [key: string]: string[] } = {};
 
   const targetInFileName = getEsVersionForFileName(
-    fullDifferential ? buildOptions.scriptTargetOverride : tsConfig.options.target,
+    tsConfig.options.target,
     buildOptions.esVersionInFileName,
   );
 
@@ -116,16 +114,14 @@ export function getCommonConfig(wco: WebpackConfigOptions): Configuration {
     }
   }
 
-  let differentialLoadingNeeded = false;
+  const differentialLoadingMode = !!wco.differentialLoadingMode;
   if (wco.buildOptions.platform !== 'server') {
-    const buildBrowserFeatures = new BuildBrowserFeatures(
-      projectRoot,
-      tsConfig.options.target || ScriptTarget.ES5,
-    );
+    if (differentialLoadingMode || tsConfig.options.target === ScriptTarget.ES5) {
+      const buildBrowserFeatures = new BuildBrowserFeatures(
+        projectRoot,
+        tsConfig.options.target || ScriptTarget.ES5,
+      );
 
-    differentialLoadingNeeded = buildBrowserFeatures.isDifferentialLoadingNeeded();
-
-    if ((buildOptions.scriptTargetOverride || tsConfig.options.target) === ScriptTarget.ES5) {
       if (
         buildOptions.es5BrowserSupport ||
         (buildOptions.es5BrowserSupport === undefined && buildBrowserFeatures.isEs5SupportNeeded())
@@ -143,26 +139,21 @@ export function getCommonConfig(wco: WebpackConfigOptions): Configuration {
             : [noModuleScript];
         }
 
-        // For full build differential loading we don't need to generate a seperate polyfill file
-        // because they will be loaded exclusivly based on module and nomodule
-        const polyfillsChunkName =
-          fullDifferential && differentialLoadingNeeded ? 'polyfills' : 'polyfills-es5';
-
+        const polyfillsChunkName = 'polyfills-es5';
         entryPoints[polyfillsChunkName] = [path.join(__dirname, '..', 'es5-polyfills.js')];
-        if (!fullDifferential && differentialLoadingNeeded) {
+        if (differentialLoadingMode) {
           // Add zone.js legacy support to the es5 polyfills
           // This is a noop execution-wise if zone-evergreen is not used.
           entryPoints[polyfillsChunkName].push('zone.js/dist/zone-legacy');
         }
         if (!buildOptions.aot) {
-          // If not performing a full differential build the JIT polyfills need to be added to ES5
-          if (!fullDifferential && differentialLoadingNeeded) {
+          if (differentialLoadingMode) {
             entryPoints[polyfillsChunkName].push(path.join(__dirname, '..', 'jit-polyfills.js'));
           }
           entryPoints[polyfillsChunkName].push(path.join(__dirname, '..', 'es5-jit-polyfills.js'));
         }
         // If not performing a full differential build the polyfills need to be added to ES5 bundle
-        if (!fullDifferential && buildOptions.polyfills) {
+        if (buildOptions.polyfills) {
           entryPoints[polyfillsChunkName].push(path.resolve(root, buildOptions.polyfills));
         }
       }
@@ -242,10 +233,7 @@ export function getCommonConfig(wco: WebpackConfigOptions): Configuration {
   }
 
   // process asset entries
-  if (
-    buildOptions.assets &&
-    (fullDifferential || buildOptions.watch || !differentialLoadingNeeded)
-  ) {
+  if (buildOptions.assets.length) {
     const copyWebpackPluginPatterns = buildOptions.assets.map((asset: AssetPatternClass) => {
       // Resolve input paths relative to workspace root and add slash at the end.
       asset.input = path.resolve(root, asset.input).replace(/\\/g, '/');
@@ -416,7 +404,7 @@ export function getCommonConfig(wco: WebpackConfigOptions): Configuration {
       mangle:
         !manglingDisabled &&
         buildOptions.platform !== 'server' &&
-        (!differentialLoadingNeeded || (differentialLoadingNeeded && fullDifferential)),
+        !differentialLoadingMode,
     };
 
     extraMinimizers.push(

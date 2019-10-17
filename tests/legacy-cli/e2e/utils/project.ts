@@ -39,6 +39,14 @@ export async function createProject(name: string, ...args: string[]) {
   await ng('new', name, '--skip-install', ...extraArgs, ...args);
   process.chdir(name);
 
+  if (fs.existsSync('tsconfig.json')) {
+    // Disable the TS version check to make TS updates easier.
+    // Only VE does it, but on Ivy the i18n extraction uses VE.
+    await updateJsonFile('tsconfig.json', config => {
+      config.angularCompilerOptions.disableTypeScriptVersionCheck = true;
+    });
+  }
+
   await prepareProjectForE2e(name);
 }
 
@@ -258,8 +266,8 @@ export function useCIChrome(projectDir: string) {
     .then(() => {
       if (fs.existsSync(protractorConf)) {
         return replaceInFile(protractorConf,
-          `'browserName': 'chrome'`,
-          `'browserName': 'chrome',
+          `browserName: 'chrome'`,
+          `browserName: 'chrome',
           chromeOptions: {
             args: ['--headless'],
             binary: require('puppeteer').executablePath()
@@ -275,11 +283,11 @@ export function useCIChrome(projectDir: string) {
           .then(() => replaceInFile(karmaConf,
             `browsers: ['Chrome']`,
             `browsers: ['Chrome'],
-          customLaunchers: {
-            ChromeHeadlessCI: {
-              base: 'ChromeHeadless',
+            customLaunchers: {
+              ChromeHeadlessCI: {
+                base: 'ChromeHeadless',
+              }
             }
-          }
         `));
       }
     });
