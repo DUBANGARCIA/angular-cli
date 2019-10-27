@@ -1,13 +1,11 @@
 import { join } from 'path';
-import { expectFileToExist, expectFileToMatch, rimraf, readFile } from '../../../utils/fs';
+import { expectFileToExist, readFile, rimraf } from '../../../utils/fs';
 import { ng } from '../../../utils/process';
 
 export default async function () {
     // forcibly remove in case another test doesn't clean itself up
     await rimraf('node_modules/@angular/pwa');
-
     await ng('add', '@angular/pwa');
-
     await expectFileToExist(join(process.cwd(), 'src/manifest.webmanifest'));
 
     // Angular PWA doesn't install as a dependency

@@ -6,16 +6,10 @@
  * found in the LICENSE file at https://angular.io/license
  */
 import { BuilderContext, BuilderOutput, createBuilder } from '@angular-devkit/architect';
-import {
-  EmittedFiles,
-  WebpackLoggingCallback,
-  runWebpack,
-} from '@angular-devkit/build-webpack';
+import { EmittedFiles, WebpackLoggingCallback, runWebpack } from '@angular-devkit/build-webpack';
 import { join, json, logging, normalize, tags, virtualFs } from '@angular-devkit/core';
 import { NodeJsSyncHost } from '@angular-devkit/core/node';
-import * as findCacheDirectory from 'find-cache-dir';
 import * as fs from 'fs';
-import * as os from 'os';
 import * as path from 'path';
 import { Observable, from, of } from 'rxjs';
 import { concatMap, map, switchMap } from 'rxjs/operators';
@@ -54,24 +48,30 @@ import {
   normalizeOptimization,
   normalizeSourceMaps,
 } from '../utils';
+import { BundleActionExecutor } from '../utils/action-executor';
+import { findCachePath } from '../utils/cache-path';
 import { copyAssets } from '../utils/copy-assets';
-import { I18nOptions, createI18nOptions } from '../utils/i18n-options';
-import { createTranslationLoader } from '../utils/load-translations';
+import { cachingDisabled } from '../utils/environment-options';
+import { i18nInlineEmittedFiles } from '../utils/i18n-inlining';
+import { I18nOptions } from '../utils/i18n-options';
+import { ensureOutputPaths } from '../utils/output-paths';
 import {
+  InlineOptions,
   ProcessBundleFile,
   ProcessBundleOptions,
   ProcessBundleResult,
 } from '../utils/process-bundle';
 import { assertCompatibleAngularVersion } from '../utils/version';
 import {
+  BrowserWebpackConfigOptions,
   generateBrowserWebpackConfigFromContext,
+  generateI18nBrowserWebpackConfigFromContext,
   getIndexInputFile,
   getIndexOutputFile,
 } from '../utils/webpack-browser-config';
-import { BundleActionExecutor } from './action-executor';
 import { Schema as BrowserBuilderSchema } from './schema';
 
-const cacheDownlevelPath = findCacheDirectory({ name: 'angular-build-dl' });
+const cacheDownlevelPath = cachingDisabled ? undefined : findCachePath('angular-build-dl');
 
 export type BrowserBuilderOutput = json.JsonObject &
   BuilderOutput & {
@@ -100,23 +100,53 @@ export function createBrowserLoggingCallback(
   };
 }
 
+// todo: the below should be cleaned once dev-server support the new i18n
+interface ConfigFromContextReturn {
+  config: webpack.Configuration;
+  projectRoot: string;
+  projectSourceRoot?: string;
+}
+
+export async function buildBrowserWebpackConfigFromContext(
+  options: BrowserBuilderSchema,
+  context: BuilderContext,
+  host: virtualFs.Host<fs.Stats>,
+  i18n: boolean,
+): Promise<ConfigFromContextReturn & { i18n: I18nOptions }>;
+export async function buildBrowserWebpackConfigFromContext(
+  options: BrowserBuilderSchema,
+  context: BuilderContext,
+  host?: virtualFs.Host<fs.Stats>,
+): Promise<ConfigFromContextReturn>;
 export async function buildBrowserWebpackConfigFromContext(
   options: BrowserBuilderSchema,
   context: BuilderContext,
   host: virtualFs.Host<fs.Stats> = new NodeJsSyncHost(),
-): Promise<{ config: webpack.Configuration; projectRoot: string; projectSourceRoot?: string }> {
+  i18n = false,
+): Promise<ConfigFromContextReturn & { i18n?: I18nOptions }> {
+  const webpackPartialGenerator = (wco: BrowserWebpackConfigOptions) => [
+    getCommonConfig(wco),
+    getBrowserConfig(wco),
+    getStylesConfig(wco),
+    getStatsConfig(wco),
+    getAnalyticsConfig(wco, context),
+    getCompilerConfig(wco),
+    wco.buildOptions.webWorkerTsConfig ? getWorkerConfig(wco) : {},
+  ];
+
+  if (i18n) {
+    return generateI18nBrowserWebpackConfigFromContext(
+      options,
+      context,
+      webpackPartialGenerator,
+      host,
+    );
+  }
+
   return generateBrowserWebpackConfigFromContext(
     options,
     context,
-    wco => [
-      getCommonConfig(wco),
-      getBrowserConfig(wco),
-      getStylesConfig(wco),
-      getStatsConfig(wco),
-      getAnalyticsConfig(wco, context),
-      getCompilerConfig(wco),
-      wco.buildOptions.webWorkerTsConfig ? getWorkerConfig(wco) : {},
-    ],
+    webpackPartialGenerator,
     host,
   );
 }
@@ -162,52 +192,12 @@ async function initialize(
   projectSourceRoot?: string;
   i18n: I18nOptions;
 }> {
-  if (!context.target) {
-    throw new Error('The builder requires a target.');
-  }
-
-  const metadata = await context.getProjectMetadata(context.target);
-  const i18n = createI18nOptions(metadata, options.localize);
-
-  if (i18n.inlineLocales.size > 0) {
-    // Load locales
-    const loader = await createTranslationLoader();
-
-    const usedFormats = new Set<string>();
-    for (const [locale, desc] of Object.entries(i18n.locales)) {
-      if (i18n.inlineLocales.has(locale)) {
-        const result = loader(desc.file);
-
-        usedFormats.add(result.format);
-        if (usedFormats.size > 1) {
-          // This limitation is technically only for legacy message id support
-          throw new Error(
-            'Localization currently only supports using one type of translation file format for the entire application.',
-          );
-        }
-
-        desc.format = result.format;
-        desc.translation = result.translation;
-      }
-    }
-
-    // Legacy message id's require the format of the translations
-    if (usedFormats.size > 0) {
-      options.i18nFormat = [...usedFormats][0];
-    }
-  }
-
   const originalOutputPath = options.outputPath;
-
-  // If inlining store the output in a temporary location to facilitate post-processing
-  if (i18n.shouldInline) {
-    options.outputPath = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'angular-cli-'));
-  }
-
-  const { config, projectRoot, projectSourceRoot } = await buildBrowserWebpackConfigFromContext(
+  const { config, projectRoot, projectSourceRoot, i18n } = await buildBrowserWebpackConfigFromContext(
     options,
     context,
     host,
+    true,
   );
 
   let transformedConfig;
@@ -216,11 +206,10 @@ async function initialize(
   }
 
   if (options.deleteOutputPath) {
-    await deleteOutputDir(
-      normalize(context.workspaceRoot),
-      normalize(originalOutputPath),
-      host,
-    ).toPromise();
+    deleteOutputDir(
+      context.workspaceRoot,
+      originalOutputPath,
+    );
   }
 
   return { config: transformedConfig || config, projectRoot, projectSourceRoot, i18n };
@@ -273,6 +262,9 @@ export function buildWebpackBrowser(
         // tslint:disable-next-line: no-big-function
         concatMap(async buildEvent => {
           const { webpackStats, success, emittedFiles = [] } = buildEvent;
+          if (!webpackStats) {
+            throw new Error('Webpack stats build result is required.');
+          }
 
           if (!success && useBundleDownleveling) {
             // If using bundle downleveling then there is only one build
@@ -286,9 +278,7 @@ export function buildWebpackBrowser(
 
             return { success };
           } else if (success) {
-            if (!fs.existsSync(baseOutputPath)) {
-              fs.mkdirSync(baseOutputPath, { recursive: true });
-            }
+            const outputPaths = ensureOutputPaths(baseOutputPath, i18n);
 
             let noModuleFiles: EmittedFiles[] | undefined;
             let moduleFiles: EmittedFiles[] | undefined;
@@ -304,13 +294,26 @@ export function buildWebpackBrowser(
               files = moduleFiles.filter(
                 x => x.extension === '.css' || (x.name && scriptsEntryPointName.includes(x.name)),
               );
+              if (i18n.shouldInline) {
+                const success = await i18nInlineEmittedFiles(
+                  context,
+                  emittedFiles,
+                  i18n,
+                  baseOutputPath,
+                  outputPaths,
+                  scriptsEntryPointName,
+                  // tslint:disable-next-line: no-non-null-assertion
+                  webpackStats.outputPath!,
+                  target <= ScriptTarget.ES5,
+                  options.i18nMissingTranslation,
+                );
+                if (!success) {
+                  return { success: false };
+                }
+              }
             } else if (isDifferentialLoadingNeeded) {
               moduleFiles = [];
               noModuleFiles = [];
-
-              if (!webpackStats) {
-                throw new Error('Webpack stats build result is required.');
-              }
 
               // Common options for all bundle process actions
               const sourceMapOptions = normalizeSourceMaps(options.sourceMap || false);
@@ -322,6 +325,7 @@ export function buildWebpackBrowser(
                 integrityAlgorithm: options.subresourceIntegrity ? 'sha384' : undefined,
               };
 
+              let mainChunkId;
               const actions: ProcessBundleOptions[] = [];
               const seen = new Set<string>();
               for (const file of emittedFiles) {
@@ -347,6 +351,11 @@ export function buildWebpackBrowser(
                   continue;
                 }
                 seen.add(file.file);
+
+                if (file.name === 'main') {
+                  // tslint:disable-next-line: no-non-null-assertion
+                  mainChunkId = file.id!.toString();
+                }
 
                 // All files at this point except ES5 polyfills are module scripts
                 const es5Polyfills =
@@ -447,84 +456,98 @@ export function buildWebpackBrowser(
                 }
 
                 context.logger.info('ES5 bundle generation complete.');
-              } finally {
-                executor.stop();
-              }
 
-              if (i18n.shouldInline) {
-                context.logger.info('Generating localized bundles...');
+                if (i18n.shouldInline) {
+                  context.logger.info('Generating localized bundles...');
 
-                const localize = await import('@angular/localize/src/tools/src/translate/main');
-                const localizeDiag = await import('@angular/localize/src/tools/src/diagnostics');
-
-                const diagnostics = new localizeDiag.Diagnostics();
-                const translationFilePaths = [];
-                let handleSourceLocale = false;
-                for (const locale of i18n.inlineLocales) {
-                  if (locale === i18n.sourceLocale) {
-                    handleSourceLocale = true;
-                    continue;
-                  }
-                  translationFilePaths.push(i18n.locales[locale].file);
-                }
-
-                if (translationFilePaths.length > 0) {
-                  const sourceFilePaths = [];
+                  const inlineActions: InlineOptions[] = [];
+                  const processedFiles = new Set<string>();
                   for (const result of processResults) {
                     if (result.original) {
-                      sourceFilePaths.push(result.original.filename);
+                      inlineActions.push({
+                        filename: path.basename(result.original.filename),
+                        code: fs.readFileSync(result.original.filename, 'utf8'),
+                        map:
+                          result.original.map &&
+                          fs.readFileSync(result.original.map.filename, 'utf8'),
+                        outputPath: baseOutputPath,
+                        es5: false,
+                        missingTranslation: options.i18nMissingTranslation,
+                        setLocale: result.name === mainChunkId,
+                      });
+                      processedFiles.add(result.original.filename);
                     }
                     if (result.downlevel) {
-                      sourceFilePaths.push(result.downlevel.filename);
+                      inlineActions.push({
+                        filename: path.basename(result.downlevel.filename),
+                        code: fs.readFileSync(result.downlevel.filename, 'utf8'),
+                        map:
+                          result.downlevel.map &&
+                          fs.readFileSync(result.downlevel.map.filename, 'utf8'),
+                        outputPath: baseOutputPath,
+                        es5: true,
+                        missingTranslation: options.i18nMissingTranslation,
+                        setLocale: result.name === mainChunkId,
+                      });
+                      processedFiles.add(result.downlevel.filename);
                     }
                   }
+
+                  let hasErrors = false;
                   try {
-                    localize.translateFiles({
-                      // tslint:disable-next-line: no-non-null-assertion
-                      sourceRootPath: webpackStats.outputPath!,
-                      sourceFilePaths,
-                      translationFilePaths,
-                      outputPathFn: (locale, relativePath) =>
-                        path.join(baseOutputPath, locale, relativePath),
-                      diagnostics,
-                      missingTranslation: options.i18nMissingTranslation || 'warning',
-                      sourceLocale: handleSourceLocale ? i18n.sourceLocale : undefined,
-                    });
+                    for await (const result of executor.inlineAll(inlineActions)) {
+                      if (options.verbose) {
+                        context.logger.info(
+                          `Localized "${result.file}" [${result.count} translation(s)].`,
+                        );
+                      }
+                      for (const diagnostic of result.diagnostics) {
+                        if (diagnostic.type === 'error') {
+                          hasErrors = true;
+                          context.logger.error(diagnostic.message);
+                        } else {
+                          context.logger.warn(diagnostic.message);
+                        }
+                      }
+                    }
+
+                    // Copy any non-processed files into the output locations
+                    await copyAssets(
+                      [
+                        {
+                          glob: '**/*',
+                          // tslint:disable-next-line: no-non-null-assertion
+                          input: webpackStats.outputPath!,
+                          output: '',
+                          ignore: [...processedFiles].map(f =>
+                            // tslint:disable-next-line: no-non-null-assertion
+                            path.relative(webpackStats.outputPath!, f),
+                          ),
+                        },
+                      ],
+                      outputPaths,
+                      '',
+                    );
                   } catch (err) {
                     context.logger.error('Localized bundle generation failed: ' + err.message);
 
                     return { success: false };
-                  } finally {
-                    try {
-                      // Remove temporary directory used for i18n processing
-                      // tslint:disable-next-line: no-non-null-assertion
-                      await host.delete(normalize(webpackStats.outputPath!)).toPromise();
-                    } catch {}
+                  }
+
+                  context.logger.info(
+                    `Localized bundle generation ${hasErrors ? 'failed' : 'complete'}.`,
+                  );
+
+                  if (hasErrors) {
+                    return { success: false };
                   }
                 }
-
-                context.logger.info(
-                  `Localized bundle generation ${diagnostics.hasErrors ? 'failed' : 'complete'}.`,
-                );
-
-                for (const message of diagnostics.messages) {
-                  if (message.type === 'error') {
-                    context.logger.error(message.message);
-                  } else {
-                    context.logger.warn(message.message);
-                  }
-                }
-
-                if (diagnostics.hasErrors) {
-                  return { success: false };
-                }
+              } finally {
+                executor.stop();
               }
 
               // Copy assets
               if (options.assets) {
-                const outputPaths = i18n.shouldInline
-                  ? [...i18n.inlineLocales].map(l => path.join(baseOutputPath, l))
-                  : [baseOutputPath];
                 try {
                   await copyAssets(
                     normalizeAssetPatterns(
@@ -613,13 +636,26 @@ export function buildWebpackBrowser(
             } else {
               files = emittedFiles.filter(x => x.name !== 'polyfills-es5');
               noModuleFiles = emittedFiles.filter(x => x.name === 'polyfills-es5');
+              if (i18n.shouldInline) {
+                const success = await i18nInlineEmittedFiles(
+                  context,
+                  emittedFiles,
+                  i18n,
+                  baseOutputPath,
+                  outputPaths,
+                  scriptsEntryPointName,
+                  // tslint:disable-next-line: no-non-null-assertion
+                  webpackStats.outputPath!,
+                  target <= ScriptTarget.ES5,
+                  options.i18nMissingTranslation,
+                );
+                if (!success) {
+                  return { success: false };
+                }
+              }
             }
 
             if (options.index) {
-              const outputPaths = i18n.shouldInline
-                ? [...i18n.inlineLocales].map(l => path.join(baseOutputPath, l))
-                : [baseOutputPath];
-
               for (const outputPath of outputPaths) {
                 try {
                   await generateIndex(
