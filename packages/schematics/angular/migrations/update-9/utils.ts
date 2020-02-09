@@ -85,14 +85,18 @@ export function getAllOptions(builderConfig: JsonAstObject, configurationsOnly =
 
 export function getWorkspace(host: Tree): JsonAstObject {
   const path = getWorkspacePath(host);
+  const content = readJsonFileAsAstObject(host, path);
+  if (!content) {
+    throw new SchematicsException(`Could not find (${path})`);
+  }
 
-  return readJsonFileAsAstObject(host, path);
+  return content;
 }
 
-export function readJsonFileAsAstObject(host: Tree, path: string): JsonAstObject {
+export function readJsonFileAsAstObject(host: Tree, path: string): JsonAstObject | undefined {
   const configBuffer = host.read(path);
   if (!configBuffer) {
-    throw new SchematicsException(`Could not find (${path})`);
+    return undefined;
   }
 
   const content = configBuffer.toString();
@@ -139,4 +143,10 @@ export function isIvyEnabled(tree: Tree, tsConfigPath: string): boolean {
   }
 
   return true;
+}
+
+// TS represents paths internally with '/' and expects paths to be in this format.
+// angular.json expects paths with '/', but doesn't enforce them.
+export function forwardSlashPath(path: string) {
+  return path.replace(/\\/g, '/');
 }

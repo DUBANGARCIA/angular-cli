@@ -14,6 +14,7 @@ import {
   Tree,
 } from '@angular-devkit/schematics';
 import { NodePackageInstallTask, RunSchematicTask } from '@angular-devkit/schematics/tasks';
+import * as npa from 'npm-package-arg';
 import { Observable, from as observableFrom, of } from 'rxjs';
 import { map, mergeMap, reduce, switchMap } from 'rxjs/operators';
 import * as semver from 'semver';
@@ -113,18 +114,24 @@ function _validateForwardPeerDependencies(
   name: string,
   infoMap: Map<string, PackageInfo>,
   peers: {[name: string]: string},
+  peersMeta: { [name: string]: { optional?: boolean }},
   logger: logging.LoggerApi,
+  next: boolean,
 ): boolean {
+  let validationFailed = false;
   for (const [peer, range] of Object.entries(peers)) {
     logger.debug(`Checking forward peer ${peer}...`);
     const maybePeerInfo = infoMap.get(peer);
+    const isOptional = peersMeta[peer] && !!peersMeta[peer].optional;
     if (!maybePeerInfo) {
-      logger.error([
-        `Package ${JSON.stringify(name)} has a missing peer dependency of`,
-        `${JSON.stringify(peer)} @ ${JSON.stringify(range)}.`,
-      ].join(' '));
+      if (!isOptional) {
+        logger.warn([
+          `Package ${JSON.stringify(name)} has a missing peer dependency of`,
+          `${JSON.stringify(peer)} @ ${JSON.stringify(range)}.`,
+        ].join(' '));
+      }
 
-      return true;
+      continue;
     }
 
     const peerVersion = maybePeerInfo.target && maybePeerInfo.target.packageJson.version
@@ -132,18 +139,19 @@ function _validateForwardPeerDependencies(
       : maybePeerInfo.installed.version;
 
     logger.debug(`  Range intersects(${range}, ${peerVersion})...`);
-    if (!semver.satisfies(peerVersion, range)) {
+    if (!semver.satisfies(peerVersion, range, { includePrerelease: next || undefined })) {
       logger.error([
         `Package ${JSON.stringify(name)} has an incompatible peer dependency to`,
         `${JSON.stringify(peer)} (requires ${JSON.stringify(range)},`,
         `would install ${JSON.stringify(peerVersion)})`,
       ].join(' '));
 
-      return true;
+      validationFailed = true;
+      continue;
     }
   }
 
-  return false;
+  return validationFailed;
 }
 
 
@@ -152,6 +160,7 @@ function _validateReversePeerDependencies(
   version: string,
   infoMap: Map<string, PackageInfo>,
   logger: logging.LoggerApi,
+  next: boolean,
 ) {
   for (const [installed, installedInfo] of infoMap.entries()) {
     const installedLogger = logger.createChild(installed);
@@ -168,7 +177,7 @@ function _validateReversePeerDependencies(
       // Override the peer version range if it's whitelisted.
       const extendedRange = _updatePeerVersion(infoMap, peer, range);
 
-      if (!semver.satisfies(version, extendedRange)) {
+      if (!semver.satisfies(version, extendedRange, { includePrerelease: next || undefined })) {
         logger.error([
           `Package ${JSON.stringify(installed)} has an incompatible peer dependency to`,
           `${JSON.stringify(name)} (requires`,
@@ -187,6 +196,7 @@ function _validateReversePeerDependencies(
 function _validateUpdatePackages(
   infoMap: Map<string, PackageInfo>,
   force: boolean,
+  next: boolean,
   logger: logging.LoggerApi,
 ): void {
   logger.debug('Updating the following packages:');
@@ -206,10 +216,11 @@ function _validateUpdatePackages(
     const pkgLogger = logger.createChild(name);
     logger.debug(`${name}...`);
 
-    const peers = target.packageJson.peerDependencies || {};
-    peerErrors = _validateForwardPeerDependencies(name, infoMap, peers, pkgLogger) || peerErrors;
+    const { peerDependencies = {}, peerDependenciesMeta = {} } = target.packageJson;
+    peerErrors = _validateForwardPeerDependencies(name, infoMap, peerDependencies,
+      peerDependenciesMeta, pkgLogger, next) || peerErrors;
     peerErrors
-      = _validateReversePeerDependencies(name, target.version, infoMap, pkgLogger)
+      = _validateReversePeerDependencies(name, target.version, infoMap, pkgLogger, next)
       || peerErrors;
   });
 
@@ -778,7 +789,7 @@ function _addPeerDependencies(
 }
 
 
-function _getAllDependencies(tree: Tree): Map<string, VersionRange> {
+function _getAllDependencies(tree: Tree): Array<readonly [string, VersionRange]> {
   const packageJsonContent = tree.read('/package.json');
   if (!packageJsonContent) {
     throw new SchematicsException('Could not find a package.json. Are you in a Node project?');
@@ -791,11 +802,11 @@ function _getAllDependencies(tree: Tree): Map<string, VersionRange> {
     throw new SchematicsException('package.json could not be parsed: ' + e.message);
   }
 
-  return new Map<string, VersionRange>([
-    ...Object.entries(packageJson.peerDependencies || {}),
-    ...Object.entries(packageJson.devDependencies || {}),
-    ...Object.entries(packageJson.dependencies || {}),
-  ] as [string, VersionRange][]);
+  return [
+    ...Object.entries(packageJson.peerDependencies || {}) as Array<[string, VersionRange]>,
+    ...Object.entries(packageJson.devDependencies || {}) as Array<[string, VersionRange]>,
+    ...Object.entries(packageJson.dependencies || {}) as Array<[string, VersionRange]>,
+  ];
 }
 
 function _formatVersion(version: string | undefined) {
@@ -816,6 +827,16 @@ function _formatVersion(version: string | undefined) {
   return version;
 }
 
+/**
+ * Returns whether or not the given package specifier (the value string in a
+ * `package.json` dependency) is hosted in the NPM registry.
+ * @throws When the specifier cannot be parsed.
+ */
+function isPkgFromRegistry(name: string, specifier: string): boolean {
+  const result = npa.resolve(name, specifier);
+
+  return !!result.registry;
+}
 
 export default function(options: UpdateSchema): Rule {
   if (!options.packages) {
@@ -837,14 +858,23 @@ export default function(options: UpdateSchema): Rule {
 
   options.from = _formatVersion(options.from);
   options.to = _formatVersion(options.to);
+  const usingYarn = options.packageManager === 'yarn';
 
   return (tree: Tree, context: SchematicContext) => {
     const logger = context.logger;
-    const allDependencies = _getAllDependencies(tree);
-    const packages = _buildPackageList(options, allDependencies, logger);
-    const usingYarn = options.packageManager === 'yarn';
+    const npmDeps = new Map(_getAllDependencies(tree).filter(([name, specifier]) => {
+      try {
+        return isPkgFromRegistry(name, specifier);
+      } catch {
+        // Abort on failure because package.json is malformed.
+        throw new SchematicsException(
+          `Failed to parse dependency "${name}" with specifier "${specifier}"`
+              + ` from package.json. Is the specifier malformed?`);
+      }
+    }));
+    const packages = _buildPackageList(options, npmDeps, logger);
 
-    return observableFrom([...allDependencies.keys()]).pipe(
+    return observableFrom(npmDeps.keys()).pipe(
       // Grab all package.json from the npm repository. This requires a lot of HTTP calls so we
       // try to parallelize as many as possible.
       mergeMap(depName => getNpmPackageJson(
@@ -889,8 +919,8 @@ export default function(options: UpdateSchema): Rule {
         do {
           lastPackagesSize = packages.size;
           npmPackageJsonMap.forEach((npmPackageJson) => {
-            _addPackageGroup(tree, packages, allDependencies, npmPackageJson, logger);
-            _addPeerDependencies(tree, packages, allDependencies, npmPackageJson, npmPackageJsonMap, logger);
+            _addPackageGroup(tree, packages, npmDeps, npmPackageJson, logger);
+            _addPeerDependencies(tree, packages, npmDeps, npmPackageJson, npmPackageJsonMap, logger);
           });
         } while (packages.size > lastPackagesSize);
 
@@ -899,7 +929,7 @@ export default function(options: UpdateSchema): Rule {
         npmPackageJsonMap.forEach((npmPackageJson) => {
           packageInfoMap.set(
             npmPackageJson.name,
-            _buildPackageInfo(tree, packages, allDependencies, npmPackageJson, logger),
+            _buildPackageInfo(tree, packages, npmDeps, npmPackageJson, logger),
           );
         });
 
@@ -923,7 +953,7 @@ export default function(options: UpdateSchema): Rule {
             logger.createChild(''),
             'warn',
           );
-          _validateUpdatePackages(infoMap, !!options.force, sublog);
+          _validateUpdatePackages(infoMap, !!options.force, !!options.next, sublog);
 
           return _performUpdate(tree, context, infoMap, logger, !!options.migrateOnly, !!options.migrateExternal);
         } else {

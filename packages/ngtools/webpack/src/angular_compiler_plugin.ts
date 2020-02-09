@@ -28,7 +28,6 @@ import {
   createCompilerHost,
   createProgram,
   formatDiagnostics,
-  isNgDiagnostic,
   readConfiguration,
 } from '@angular/compiler-cli';
 import { ChildProcess, ForkOptions, fork } from 'child_process';
@@ -38,8 +37,8 @@ import * as ts from 'typescript';
 import { Compiler, compilation } from 'webpack';
 import { time, timeEnd } from './benchmark';
 import { WebpackCompilerHost } from './compiler_host';
+import { DiagnosticMode, gatherDiagnostics, hasErrors, reportDiagnostics } from './diagnostics';
 import { resolveEntryModuleFromMain } from './entry_resolver';
-import { DiagnosticMode, gatherDiagnostics, hasErrors } from './gather_diagnostics';
 import {
   AngularCompilerPluginOptions,
   ContextElementDependencyConstructor,
@@ -62,6 +61,7 @@ import {
 } from './transformers';
 import { collectDeepNodes } from './transformers/ast_helpers';
 import { downlevelConstructorParameters } from './transformers/ctor-parameters';
+import { removeIvyJitSupportCalls } from './transformers/remove-ivy-jit-support-calls';
 import {
   AUTO_START_ARG,
 } from './type_checker';
@@ -110,7 +110,9 @@ export class AngularCompilerPlugin {
   // even whe only a single file gets updated.
   private _hadFullJitEmit: boolean | undefined;
   private _unusedFiles = new Set<string>();
+  private _typeDeps = new Set<string>();
   private _changedFileExtensions = new Set(['ts', 'tsx', 'html', 'css', 'js', 'json']);
+  private _nodeModulesRegExp = /[\\\/]node_modules[\\\/]/;
 
   // Webpack plugin.
   private _firstRun = true;
@@ -592,7 +594,7 @@ export class AngularCompilerPlugin {
     }
   }
 
-  private _warnOnUnusedFiles(compilation: compilation.Compilation) {
+  private _checkUnusedFiles(compilation: compilation.Compilation) {
     // Only do the unused TS files checks when under Ivy
     // since previously we did include unused files in the compilation
     // See: https://github.com/angular/angular-cli/pull/15030
@@ -601,6 +603,7 @@ export class AngularCompilerPlugin {
       return;
     }
 
+    // Bail if there's no TS program. Nothing to do in that case.
     const program = this._getTsProgram();
     if (!program) {
       return;
@@ -609,41 +612,54 @@ export class AngularCompilerPlugin {
     // Exclude the following files from unused checks
     // - ngfactories & ngstyle might not have a correspondent
     //   JS file example `@angular/core/core.ngfactory.ts`.
-    // - .d.ts files might not have a correspondent JS file due to bundling.
     // - __ng_typecheck__.ts will never be requested.
-    const fileExcludeRegExp = /(\.(d|ngfactory|ngstyle)\.ts|ng_typecheck__\.ts)$/;
+    const fileExcludeRegExp = /(\.(ngfactory|ngstyle|ngsummary)\.ts|ng_typecheck__\.ts)$/;
 
-    const usedFiles = new Set<string>();
-    for (const compilationModule of compilation.modules) {
-      if (!compilationModule.resource) {
-        continue;
+    // Start all the source file names we care about.
+    // Ignore matches to the regexp above, files we've already reported once before, and
+    // node_modules.
+    const sourceFiles = program.getSourceFiles()
+      .map(x => this._compilerHost.denormalizePath(x.fileName))
+      .filter(f => !(fileExcludeRegExp.test(f) || this._unusedFiles.has(f)
+        || this._nodeModulesRegExp.test(f)));
+
+    // Make a set with the sources, but exclude .d.ts files since those are type-only.
+    const unusedSourceFileNames = new Set(sourceFiles.filter(f => !f.endsWith('.d.ts')));
+    // Separately keep track of type-only deps.
+    const typeDepFileNames = new Set(sourceFiles);
+
+    // This function removes a source file name and all its dependencies from the set.
+    const removeSourceFile = (fileName: string, originalModule = false) => {
+      if (unusedSourceFileNames.has(fileName)
+        || (originalModule && typeDepFileNames.has(fileName))) {
+        unusedSourceFileNames.delete(fileName);
+        if (originalModule) {
+          typeDepFileNames.delete(fileName);
+        }
+        this.getDependencies(fileName, false).forEach(f => removeSourceFile(f));
       }
+    };
 
-      usedFiles.add(forwardSlashPath(compilationModule.resource));
+    // Go over all the modules in the webpack compilation and remove them from the sets.
+    compilation.modules.forEach(m => m.resource ? removeSourceFile(m.resource, true) : null);
 
-      // We need the below for dependencies which
-      // are not emitted such as type only TS files
-      for (const dependency of compilationModule.buildInfo.fileDependencies) {
-        usedFiles.add(forwardSlashPath(dependency));
-      }
-    }
-
-    const sourceFiles = program.getSourceFiles();
-    for (const { fileName } of sourceFiles) {
-      if (
-        fileExcludeRegExp.test(fileName)
-        || usedFiles.has(fileName)
-        || this._unusedFiles.has(fileName)
-      ) {
-        continue;
-      }
-
+    // Anything that remains is unused, because it wasn't referenced directly or transitively
+    // on the files in the compilation.
+    for (const fileName of unusedSourceFileNames) {
       compilation.warnings.push(
         `${fileName} is part of the TypeScript compilation but it's unused.\n` +
         `Add only entry points to the 'files' or 'include' properties in your tsconfig.`,
         );
       this._unusedFiles.add(fileName);
+      // Remove the truly unused from the type dep list.
+      typeDepFileNames.delete(fileName);
     }
+
+    // At this point we know what the type deps are.
+    // These are the TS files that weren't part of the compilation modules, aren't unused, but were
+    // part of the TS original source list.
+    // Next build we add them to the TS entry points so that they trigger rebuilds.
+    this._typeDeps = typeDepFileNames;
   }
 
   // Registration hook for webpack plugin.
@@ -662,7 +678,7 @@ export class AngularCompilerPlugin {
     // cleanup if not watching
     compiler.hooks.thisCompilation.tap('angular-compiler', compilation => {
       compilation.hooks.finishModules.tap('angular-compiler', () => {
-        this._warnOnUnusedFiles(compilation);
+        this._checkUnusedFiles(compilation);
 
         let rootCompiler = compiler;
         while (rootCompiler.parentCompilation) {
@@ -776,7 +792,9 @@ export class AngularCompilerPlugin {
     if (this._discoverLazyRoutes) {
       // Add lazy modules to the context module for @angular/core
       compiler.hooks.contextModuleFactory.tap('angular-compiler', cmf => {
-        const angularCorePackagePath = require.resolve('@angular/core/package.json');
+        const angularCorePackagePath = require.resolve('@angular/core/package.json', {
+          paths: [this._basePath],
+        });
 
         // APFv6 does not have single FESM anymore. Instead of verifying if we're pointing to
         // FESMs, we resolve the `@angular/core` path and verify that the path for the
@@ -981,8 +999,20 @@ export class AngularCompilerPlugin {
       // This is required to support forwardRef in ES2015 due to TDZ issues
       this._transformers.push(downlevelConstructorParameters(getTypeChecker));
     } else {
-      // Remove unneeded angular decorators.
-      this._transformers.push(removeDecorators(isAppPath, getTypeChecker));
+      if (!this._compilerOptions.enableIvy) {
+        // Remove unneeded angular decorators in VE.
+        // In Ivy they are removed in ngc directly.
+        this._transformers.push(removeDecorators(isAppPath, getTypeChecker));
+      } else {
+        // Default for both options is to emit (undefined means true)
+        const removeClassMetadata = this._options.emitClassMetadata === false;
+        const removeNgModuleScope = this._options.emitNgModuleScope === false;
+        if (removeClassMetadata || removeNgModuleScope) {
+          this._transformers.push(
+            removeIvyJitSupportCalls(removeClassMetadata, removeNgModuleScope, getTypeChecker),
+          );
+        }
+      }
       // Import ngfactory in loadChildren import syntax
       if (this._useFactories) {
         // Only transform imports to use factories with View Engine.
@@ -1076,59 +1106,13 @@ export class AngularCompilerPlugin {
     const { emitResult, diagnostics } = this._emit();
     timeEnd('AngularCompilerPlugin._update._emit');
 
-    // Report Diagnostics
-    const tsErrors = [];
-    const tsWarnings = [];
-    const ngErrors = [];
-    const ngWarnings = [];
-
-    for (const diagnostic of diagnostics) {
-      switch (diagnostic.category) {
-        case ts.DiagnosticCategory.Error:
-          if (isNgDiagnostic(diagnostic)) {
-            ngErrors.push(diagnostic);
-          } else {
-            tsErrors.push(diagnostic);
-          }
-          break;
-        case ts.DiagnosticCategory.Message:
-        case ts.DiagnosticCategory.Suggestion:
-          // Warnings?
-        case ts.DiagnosticCategory.Warning:
-          if (isNgDiagnostic(diagnostic)) {
-            ngWarnings.push(diagnostic);
-          } else {
-            tsWarnings.push(diagnostic);
-          }
-          break;
-      }
-    }
-
-    if (tsErrors.length > 0) {
-      const message = ts.formatDiagnosticsWithColorAndContext(
-        tsErrors,
-        this._compilerHost,
-      );
-      this._errors.push(new Error(message));
-    }
-
-    if (tsWarnings.length > 0) {
-      const message = ts.formatDiagnosticsWithColorAndContext(
-        tsWarnings,
-        this._compilerHost,
-      );
-      this._warnings.push(message);
-    }
-
-    if (ngErrors.length > 0) {
-      const message = formatDiagnostics(ngErrors);
-      this._errors.push(new Error(message));
-    }
-
-    if (ngWarnings.length > 0) {
-      const message = formatDiagnostics(ngWarnings);
-      this._warnings.push(message);
-    }
+    // Report any diagnostics.
+    reportDiagnostics(
+      diagnostics,
+      this._compilerHost,
+      msg => this._errors.push(new Error(msg)),
+      msg => this._warnings.push(msg),
+    );
 
     this._emitSkipped = !emitResult || emitResult.emitSkipped;
 
@@ -1190,7 +1174,7 @@ export class AngularCompilerPlugin {
         let msg = `${fileName} is missing from the TypeScript compilation. `
           + `Please make sure it is in your tsconfig via the 'files' or 'include' property.`;
 
-        if (/(\\|\/)node_modules(\\|\/)/.test(fileName)) {
+        if (this._nodeModulesRegExp.test(fileName)) {
           msg += '\nThe missing file seems to be part of a third party library. '
             + 'TS files in published libraries are often a sign of a badly packaged library. '
             + 'Please open an issue in the library repository to alert its author and ask them '
@@ -1207,7 +1191,7 @@ export class AngularCompilerPlugin {
     return { outputText, sourceMap, errorDependencies };
   }
 
-  getDependencies(fileName: string): string[] {
+  getDependencies(fileName: string, includeResources = true): string[] {
     const resolvedFileName = this._compilerHost.resolve(fileName);
     const sourceFile = this._compilerHost.getSourceFile(resolvedFileName, ts.ScriptTarget.Latest);
     if (!sourceFile) {
@@ -1241,25 +1225,50 @@ export class AngularCompilerPlugin {
       })
       .filter(x => x) as string[];
 
-    const resourceImports = findResources(sourceFile)
-      .map(resourcePath => resolve(dirname(resolvedFileName), normalize(resourcePath)));
+    let resourceImports: string[] = [];
+    const resourceDependencies: string[] = [];
+    if (includeResources) {
+      resourceImports = findResources(sourceFile)
+        .map(resourcePath => resolve(dirname(resolvedFileName), normalize(resourcePath)));
+
+      for (const resource of resourceImports) {
+        for (const dep of this.getResourceDependencies(
+            this._compilerHost.denormalizePath(resource))) {
+          resourceDependencies.push(dep);
+        }
+      }
+    }
 
     // These paths are meant to be used by the loader so we must denormalize them.
     const uniqueDependencies = new Set([
       ...esImports,
       ...resourceImports,
-      ...this.getResourceDependencies(this._compilerHost.denormalizePath(resolvedFileName)),
+      ...resourceDependencies,
     ].map((p) => p && this._compilerHost.denormalizePath(p)));
 
     return [...uniqueDependencies];
   }
 
-  getResourceDependencies(fileName: string): string[] {
+  getResourceDependencies(fileName: string) {
     if (!this._resourceLoader) {
       return [];
     }
+    // The source loader uses TS-style forward slash paths for all platforms.
+    const resolvedFileName = forwardSlashPath(fileName);
 
-    return this._resourceLoader.getResourceDependencies(fileName);
+    return this._resourceLoader.getResourceDependencies(resolvedFileName);
+  }
+
+  getTypeDependencies(fileName: string): string[] {
+    // We currently add all type deps directly to the main path.
+    // If there's no main path or the lookup isn't the main path, bail.
+    if (!this._mainPath || this._compilerHost.resolve(fileName) != this._mainPath) {
+      return [];
+    }
+
+    // Note: this set is always for the previous build, not the current build.
+    // It should be better than not having rebuilds on type deps but isn't 100% correct.
+    return Array.from(this._typeDeps);
   }
 
   // This code mostly comes from `performCompilation` in `@angular/compiler-cli`.

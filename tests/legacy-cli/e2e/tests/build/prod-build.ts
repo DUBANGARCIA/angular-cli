@@ -4,6 +4,7 @@ import { getGlobalVariable } from '../../utils/env';
 import { expectFileToExist, expectFileToMatch, readFile } from '../../utils/fs';
 import { expectGitToBeClean } from '../../utils/git';
 import { ng } from '../../utils/process';
+import { expectToFail } from '../../utils/utils';
 
 
 function verifySize(bundle: string, baselineBytes: number) {
@@ -51,14 +52,20 @@ export default async function () {
   // Content checks
   await expectFileToMatch(`dist/test-project/${mainES5Path}`, bootstrapRegExp);
   await expectFileToMatch(`dist/test-project/${mainES2015Path}`, bootstrapRegExp);
+  await expectToFail(() =>
+    expectFileToMatch(`dist/test-project/${mainES5Path}`, 'setNgModuleScope'),
+  );
+  await expectToFail(() =>
+    expectFileToMatch(`dist/test-project/${mainES5Path}`, 'setClassMetadata'),
+  );
 
   // Size checks in bytes
   if (veProject) {
     verifySize(mainES5Path, 184470);
     verifySize(mainES2015Path, 163627);
   } else {
-    verifySize(mainES5Path, 148031);
-    verifySize(mainES2015Path, 137494);
+    verifySize(mainES5Path, 163321);
+    verifySize(mainES2015Path, 141032);
   }
 
   // Check that the process didn't change local files.

@@ -140,7 +140,7 @@ export async function generateI18nBrowserWebpackConfigFromContext(
   webpackPartialGenerator: (wco: BrowserWebpackConfigOptions) => webpack.Configuration[],
   host: virtualFs.Host<fs.Stats> = new NodeJsSyncHost(),
 ): Promise<{ config: webpack.Configuration; projectRoot: string; projectSourceRoot?: string, i18n: I18nOptions }> {
-  const { buildOptions, i18n } = await configureI18nBuild(context, host, options);
+  const { buildOptions, i18n } = await configureI18nBuild(context, options);
   const result = await generateBrowserWebpackConfigFromContext(buildOptions, context, webpackPartialGenerator, host);
   const config = result.config;
 
@@ -153,6 +153,37 @@ export async function generateI18nBrowserWebpackConfigFromContext(
       config.resolve.alias = {};
     }
     config.resolve.alias['@angular/localize/init'] = require.resolve('./empty.js');
+
+    // Update file hashes to include translation file content
+    const i18nHash = Object.values(i18n.locales).reduce(
+      (data, locale) => data + (locale.integrity || ''),
+      '',
+    );
+    if (!config.plugins) {
+      config.plugins = [];
+    }
+    config.plugins.push({
+      apply(compiler) {
+        compiler.hooks.compilation.tap('build-angular', compilation => {
+          // Webpack typings do not contain template hashForChunk hook
+          // tslint:disable-next-line: no-any
+          (compilation.mainTemplate.hooks as any).hashForChunk.tap(
+            'build-angular',
+            (hash: { update(data: string): void }) => {
+              hash.update('$localize' + i18nHash);
+            },
+          );
+          // Webpack typings do not contain hooks property
+          // tslint:disable-next-line: no-any
+          (compilation.chunkTemplate as any).hooks.hashForChunk.tap(
+            'build-angular',
+            (hash: { update(data: string): void }) => {
+              hash.update('$localize' + i18nHash);
+            },
+          );
+        });
+      },
+    });
   }
 
   return { ...result, i18n };

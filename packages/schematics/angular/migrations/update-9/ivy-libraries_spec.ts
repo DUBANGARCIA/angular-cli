@@ -64,13 +64,27 @@ describe('Migration to version 9', () => {
       tree.delete(libProdTsConfig);
     });
 
+    it(`should add 'tsConfig' option with correct path when 'root' is an empty string`, async () => {
+      let config = JSON.parse(tree.readContent(workspacePath));
+      const projectConfig = config.projects['migration-lib'];
+      projectConfig.architect.build.configurations = undefined;
+      projectConfig.root = '';
+      tree.overwrite(workspacePath, JSON.stringify(config, undefined, 2));
+
+      const libProdTsConfigPath = 'tsconfig.lib.prod.json';
+      const tree2 = await schematicRunner.runSchematicAsync('workspace-version-9', {}, tree.branch()).toPromise();
+      config = getWorkspaceTargets(tree2).build;
+      expect(config.configurations.production.tsConfig).toEqual(libProdTsConfigPath);
+      expect(tree2.exists(libProdTsConfigPath)).toBeTruthy();
+    });
+
     it(`should add 'tsConfig' option in production when configurations doesn't exists`, async () => {
       let config = getWorkspaceTargets(tree);
       config.build.configurations = undefined;
 
       updateWorkspaceTargets(tree, config);
 
-      const tree2 = await schematicRunner.runSchematicAsync('migration-09', {}, tree.branch()).toPromise();
+      const tree2 = await schematicRunner.runSchematicAsync('workspace-version-9', {}, tree.branch()).toPromise();
       config = getWorkspaceTargets(tree2).build;
       expect(config.configurations.production.tsConfig).toEqual(libProdTsConfig);
       expect(tree2.exists(libProdTsConfig)).toBeTruthy();
@@ -82,7 +96,7 @@ describe('Migration to version 9', () => {
 
       updateWorkspaceTargets(tree, config);
 
-      const tree2 = await schematicRunner.runSchematicAsync('migration-09', {}, tree.branch()).toPromise();
+      const tree2 = await schematicRunner.runSchematicAsync('workspace-version-9', {}, tree.branch()).toPromise();
       config = getWorkspaceTargets(tree2).build;
       expect(config.configurations.production.tsConfig).toEqual(libProdTsConfig);
       expect(tree2.exists(libProdTsConfig)).toBeTruthy();
@@ -94,7 +108,7 @@ describe('Migration to version 9', () => {
 
       updateWorkspaceTargets(tree, config);
 
-      const tree2 = await schematicRunner.runSchematicAsync('migration-09', {}, tree.branch()).toPromise();
+      const tree2 = await schematicRunner.runSchematicAsync('workspace-version-9', {}, tree.branch()).toPromise();
       config = getWorkspaceTargets(tree2).build;
       expect(config.configurations.production.tsConfig).toEqual(libProdTsConfig);
       expect(tree2.exists(libProdTsConfig)).toBeTruthy();
@@ -113,7 +127,7 @@ describe('Migration to version 9', () => {
 
       tree.create(prodLibTsConfig, JSON.stringify(tsconfig, undefined, 2));
 
-      const tree2 = await schematicRunner.runSchematicAsync('migration-09', {}, tree.branch()).toPromise();
+      const tree2 = await schematicRunner.runSchematicAsync('workspace-version-9', {}, tree.branch()).toPromise();
       config = getWorkspaceTargets(tree2).build;
       expect(config.configurations.production.tsConfig).toEqual(prodLibTsConfig);
 
@@ -137,7 +151,7 @@ describe('Migration to version 9', () => {
 
       tree.create(prodLibTsConfig, JSON.stringify(tsconfig, undefined, 2));
 
-      const tree2 = await schematicRunner.runSchematicAsync('migration-09', {}, tree.branch()).toPromise();
+      const tree2 = await schematicRunner.runSchematicAsync('workspace-version-9', {}, tree.branch()).toPromise();
       config = getWorkspaceTargets(tree2).build;
       expect(config.configurations.production.tsConfig).toEqual(prodLibTsConfig);
 

@@ -7,7 +7,7 @@
  */
 
 import { Logger, PathMappings, process as mainNgcc } from '@angular/compiler-cli/ngcc';
-import { existsSync } from 'fs';
+import { accessSync, constants, existsSync } from 'fs';
 import * as path from 'path';
 import * as ts from 'typescript';
 import { InputFileSystem } from 'webpack';
@@ -54,7 +54,8 @@ export class NgccProcessor {
     resolvedModule: ts.ResolvedModule | ts.ResolvedTypeReferenceDirective,
   ): void {
     const resolvedFileName = resolvedModule.resolvedFileName;
-    if (!resolvedFileName || moduleName.startsWith('.') || this._processedModules.has(moduleName)) {
+    if (!resolvedFileName || moduleName.startsWith('.')
+      || this._processedModules.has(resolvedFileName)) {
       // Skip when module is unknown, relative or NGCC compiler is not found or already processed.
       return;
     }
@@ -62,7 +63,18 @@ export class NgccProcessor {
     const packageJsonPath = this.tryResolvePackage(moduleName, resolvedFileName);
     if (!packageJsonPath) {
       // add it to processed so the second time round we skip this.
-      this._processedModules.add(moduleName);
+      this._processedModules.add(resolvedFileName);
+
+      return;
+    }
+
+    // If the package.json is read only we should skip calling NGCC.
+    // With Bazel when running under sandbox the filesystem is read-only.
+    try {
+      accessSync(packageJsonPath, constants.W_OK);
+    } catch {
+      // add it to processed so the second time round we skip this.
+      this._processedModules.add(resolvedFileName);
 
       return;
     }
@@ -86,7 +98,11 @@ export class NgccProcessor {
     // tslint:disable-next-line:no-any
     (this.inputFileSystem as any).purge(packageJsonPath);
 
-    this._processedModules.add(moduleName);
+    this._processedModules.add(resolvedFileName);
+  }
+
+  invalidate(fileName: string) {
+    this._processedModules.delete(fileName);
   }
 
   /**

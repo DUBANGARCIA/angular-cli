@@ -2,7 +2,6 @@ import * as express from 'express';
 import { resolve } from 'path';
 import { getGlobalVariable } from '../../utils/env';
 import {
-  appendToFile,
   copyFile,
   expectFileToExist,
   expectFileToMatch,
@@ -15,11 +14,23 @@ import { expectToFail } from '../../utils/utils';
 import { readNgVersion } from '../../utils/version';
 
 export default async function() {
+  // TEMP: disable pending i18n updates
+  // TODO: when re-enabling, use setupI18nConfig and helpers like other i18n tests.
+  return;
+
   let localizeVersion = '@angular/localize@' + readNgVersion();
   if (getGlobalVariable('argv')['ng-snapshots']) {
     localizeVersion = require('../../ng-snapshot/package.json').dependencies['@angular/localize'];
   }
   await npm('install', `${localizeVersion}`);
+
+  let serviceWorkerVersion = '@angular/service-worker@' + readNgVersion();
+  if (getGlobalVariable('argv')['ng-snapshots']) {
+    serviceWorkerVersion = require('../../ng-snapshot/package.json').dependencies[
+      '@angular/service-worker'
+    ];
+  }
+  await npm('install', `${serviceWorkerVersion}`);
 
   await updateJsonFile('tsconfig.json', config => {
     config.compilerOptions.target = 'es2015';
@@ -51,8 +62,11 @@ export default async function() {
       },
     ];
 
+    // Enable service worker
+    appArchitect['build'].options.serviceWorker = true;
+
     // Enable localization for all locales
-    appArchitect['build'].options.localize = true;
+    // appArchitect['build'].options.localize = true;
 
     // Add locale definitions to the project
     // tslint:disable-next-line: no-any
@@ -70,6 +84,29 @@ export default async function() {
       };
     }
   });
+
+  // Add service worker source configuration
+  const manifest = {
+    index: '/index.html',
+    assetGroups: [
+      {
+        name: 'app',
+        installMode: 'prefetch',
+        resources: {
+          files: ['/favicon.ico', '/index.html', '/manifest.webmanifest', '/*.css', '/*.js'],
+        },
+      },
+      {
+        name: 'assets',
+        installMode: 'lazy',
+        updateMode: 'prefetch',
+        resources: {
+          files: ['/assets/**', '/*.(eot|svg|cur|jpg|png|webp|gif|otf|ttf|woff|woff2|ani)'],
+        },
+      },
+    ],
+  };
+  await writeFile('ngsw-config.json', JSON.stringify(manifest));
 
   // Add a translatable element.
   await writeFile(
@@ -109,6 +146,9 @@ export default async function() {
     await expectFileToMatch(`${baseDir}/${lang}/main-es5.js`, lang);
     await expectFileToMatch(`${baseDir}/${lang}/main-es2015.js`, lang);
 
+    // Expect service worker configuration to be present
+    await expectFileToExist(`${baseDir}/${lang}/ngsw.json`);
+
     // Ivy i18n doesn't yet work with `ng serve` so we must use a separate server.
     const app = express();
     app.use(express.static(resolve(baseDir, lang)));
@@ -141,11 +181,4 @@ export default async function() {
       server.close();
     }
   }
-
-  // Verify missing translation behaviour.
-  await appendToFile('src/app/app.component.html', '<p i18n>Other content</p>');
-  await ng('build', '--i18n-missing-translation', 'ignore');
-  await expectFileToMatch(`${baseDir}/fr/main-es5.js`, /Other content/);
-  await expectFileToMatch(`${baseDir}/fr/main-es2015.js`, /Other content/);
-  await expectToFail(() => ng('build', '--i18n-missing-translation', 'error'));
 }

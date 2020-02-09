@@ -40,7 +40,7 @@ function emittedFilesToInlineOptions(
       es5,
       outputPath,
       missingTranslation,
-      setLocale: emittedFile.name === 'main',
+      setLocale: emittedFile.name === 'main' || emittedFile.name === 'vendor',
     };
     originalFiles.push(originalPath);
 
@@ -112,7 +112,7 @@ export async function i18nInlineEmittedFiles(
 
     return false;
   } finally {
-    executor.stop();
+    await executor.stop();
   }
 
   if (hasErrors) {

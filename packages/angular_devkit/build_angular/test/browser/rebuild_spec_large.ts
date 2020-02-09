@@ -21,6 +21,9 @@ import {
 
 describe('Browser Builder rebuilds', () => {
   const target = { project: 'app', target: 'build' };
+  // Rebuild tests are especially sensitive to time between writes due to file watcher
+  // behaviour. Give them a while.
+  const rebuildDebounceTime = 3000;
   let architect: Architect;
 
   beforeEach(async () => {
@@ -77,7 +80,7 @@ describe('Browser Builder rebuilds', () => {
     const run = await architect.scheduleTarget(target, overrides);
     await run.output
       .pipe(
-        debounceTime(1000),
+        debounceTime(rebuildDebounceTime),
         tap(result => {
           expect(result.success).toBe(true, 'build should succeed');
           const hasLazyChunk = host.scopedSync().exists(normalize('dist/lazy-lazy-module.js'));
@@ -128,7 +131,7 @@ describe('Browser Builder rebuilds', () => {
     const run = await architect.scheduleTarget(target, overrides);
     await run.output
       .pipe(
-        debounceTime(1000),
+        debounceTime(rebuildDebounceTime),
         tap(buildEvent => expect(buildEvent.success).toBe(true)),
         tap(() => host.appendToFile('src/app/app.component.css', ':host { color: blue; }')),
         take(2),
@@ -158,7 +161,7 @@ describe('Browser Builder rebuilds', () => {
     const run = await architect.scheduleTarget(target, overrides, { logger });
     await run.output
       .pipe(
-        debounceTime(1000),
+        debounceTime(rebuildDebounceTime),
         tap(buildEvent => {
           buildNumber += 1;
           switch (buildNumber) {
@@ -211,10 +214,56 @@ describe('Browser Builder rebuilds', () => {
     const run = await architect.scheduleTarget(target, overrides);
     await run.output
       .pipe(
-        debounceTime(1000),
+        debounceTime(rebuildDebounceTime),
         tap(buildEvent => expect(buildEvent.success).toBe(true)),
         tap(() => host.writeMultipleFiles({ 'src/type.ts': `export type MyType = string;` })),
         take(2),
+      )
+      .toPromise();
+  });
+
+  it('rebuilds on transitive type-only file changes', async () => {
+    if (veEnabled) {
+      // TODO: https://github.com/angular/angular-cli/issues/15056
+      pending('Only supported in Ivy.');
+
+      return;
+    }
+    host.writeMultipleFiles({
+      'src/interface1.ts': `
+        import { Interface2 } from './interface2';
+        export interface Interface1 extends Interface2 { }
+      `,
+      'src/interface2.ts': `
+        import { Interface3 } from './interface3';
+        export interface Interface2 extends Interface3 { }
+      `,
+      'src/interface3.ts': `export interface Interface3 { nbr: number; }`,
+    });
+    host.appendToFile('src/main.ts', `
+      import { Interface1 } from './interface1';
+      const something: Interface1 = { nbr: 43 };
+    `);
+
+    const overrides = { watch: true };
+    const run = await architect.scheduleTarget(target, overrides);
+    let buildNumber = 0;
+    await run.output
+      .pipe(
+        debounceTime(rebuildDebounceTime),
+        tap(buildEvent => expect(buildEvent.success).toBe(true)),
+        tap(() => {
+          // NOTE: this only works for transitive type deps after the first build, and only if the
+          // typedep file was there on the previous build.
+          // Make sure the first rebuild is triggered on a direct dep (typedep or not).
+          buildNumber++;
+          if (buildNumber < 4) {
+            host.appendToFile(`src/interface${buildNumber}.ts`, `export type MyType = string;`);
+          } else {
+            host.appendToFile(`src/typings.d.ts`, `export type MyType = string;`);
+          }
+        }),
+        take(5),
       )
       .toPromise();
   });
@@ -234,7 +283,7 @@ describe('Browser Builder rebuilds', () => {
     const run = await architect.scheduleTarget(target, overrides, { logger });
     await run.output
       .pipe(
-        debounceTime(1000),
+        debounceTime(rebuildDebounceTime),
         tap(buildEvent => {
           buildNumber++;
           switch (buildNumber) {
@@ -266,13 +315,6 @@ describe('Browser Builder rebuilds', () => {
   });
 
   it('rebuilds after errors in AOT', async () => {
-    // DISABLED_FOR_IVY - These should pass but are currently not supported
-    if (!veEnabled) {
-      pending('Broken in Ivy: https://github.com/angular/angular/issues/32214');
-
-      return;
-    }
-
     // Save the original contents of `./src/app/app.component.ts`.
     const origContent = virtualFs.fileBufferToString(
       host.scopedSync().read(normalize('src/app/app.component.ts')),
@@ -280,7 +322,10 @@ describe('Browser Builder rebuilds', () => {
     // Add a major static analysis error on a non-main file to the initial build.
     host.replaceInFile('./src/app/app.component.ts', `'app-root'`, `(() => 'app-root')()`);
 
-    const overrides = { watch: true, aot: true };
+    // `selector must be a string` errors on VE are part of the emit result, but on Ivy they only
+    // show up in getNgSemanticDiagnostics. Since getNgSemanticDiagnostics is only called on the
+    // type checker, we must disable it to get a failing fourth build with Ivy.
+    const overrides = { watch: true, aot: true, forkTypeChecker: veEnabled };
     const logger = new TestLogger('rebuild-aot-errors');
     const staticAnalysisError = !veEnabled
       ? 'selector must be a string'
@@ -291,22 +336,24 @@ describe('Browser Builder rebuilds', () => {
     const run = await architect.scheduleTarget(target, overrides, { logger });
     await run.output
       .pipe(
-        debounceTime(1000),
+        debounceTime(rebuildDebounceTime),
         tap(buildEvent => {
           buildNumber += 1;
           switch (buildNumber) {
             case 1:
               // The first build should error out with a static analysis error.
-              expect(buildEvent.success).toBe(false);
-              expect(logger.includes(staticAnalysisError)).toBe(true);
+              expect(buildEvent.success).toBe(false, 'First build should not succeed.');
+              expect(logger.includes(staticAnalysisError)).toBe(true,
+                'First build should have static analysis error.');
               logger.clear();
               // Fix the static analysis error.
               host.writeMultipleFiles({ 'src/app/app.component.ts': origContent });
               break;
 
             case 2:
-              expect(buildEvent.success).toBe(true);
-              expect(logger.includes(staticAnalysisError)).toBe(false);
+              expect(buildEvent.success).toBe(true, 'Second build should succeed.');
+              expect(logger.includes(staticAnalysisError)).toBe(false,
+                'Second build should not have static analysis error.');
               logger.clear();
               // Add an syntax error to a non-main file.
               host.appendToFile('src/app/app.component.ts', `]]]`);
@@ -314,9 +361,11 @@ describe('Browser Builder rebuilds', () => {
 
             case 3:
               // The third build should have TS syntax error.
-              expect(buildEvent.success).toBe(false);
-              expect(logger.includes(syntaxError)).toBe(true);
-              expect(logger.includes(staticAnalysisError)).toBe(false);
+              expect(buildEvent.success).toBe(false, 'Third build should not succeed.');
+              expect(logger.includes(syntaxError)).toBe(true,
+                'Third build should have syntax analysis error.');
+              expect(logger.includes(staticAnalysisError)).toBe(false,
+                'Third build should not have static analysis error.');
               logger.clear();
               // Fix the syntax error, but add the static analysis error again.
               host.writeMultipleFiles({
@@ -328,9 +377,11 @@ describe('Browser Builder rebuilds', () => {
               break;
 
             case 4:
-              expect(buildEvent.success).toBe(false);
-              expect(logger.includes(syntaxError)).toBe(false);
-              expect(logger.includes(staticAnalysisError)).toBe(true);
+              expect(buildEvent.success).toBe(false, 'Fourth build should not succeed.');
+              expect(logger.includes(syntaxError)).toBe(false,
+                'Fourth build should not have syntax analysis error.');
+              expect(logger.includes(staticAnalysisError)).toBe(true,
+                'Fourth build should have static analysis error.');
               logger.clear();
               // Restore the file to a error-less state.
               host.writeMultipleFiles({ 'src/app/app.component.ts': origContent });
@@ -338,9 +389,11 @@ describe('Browser Builder rebuilds', () => {
 
             case 5:
               // The fifth build should have everything fixed..
-              expect(buildEvent.success).toBe(true);
-              expect(logger.includes(syntaxError)).toBe(false);
-              expect(logger.includes(staticAnalysisError)).toBe(false);
+              expect(buildEvent.success).toBe(true, 'Fifth build should succeed.');
+              expect(logger.includes(syntaxError)).toBe(false,
+                'Fifth build should not have syntax analysis error.');
+              expect(logger.includes(staticAnalysisError)).toBe(false,
+                'Fifth build should not have static analysis error.');
               break;
           }
         }),
@@ -365,7 +418,7 @@ describe('Browser Builder rebuilds', () => {
     const run = await architect.scheduleTarget(target, overrides);
     await run.output
       .pipe(
-        debounceTime(1000),
+        debounceTime(rebuildDebounceTime),
         tap(buildEvent => {
           buildNumber += 1;
           const fileName = './dist/main.js';
@@ -405,7 +458,7 @@ describe('Browser Builder rebuilds', () => {
               expect(content).toContain('CSS_REBUILD_STRING');
               // Change the component css import.
               host.appendToFile(
-                'src/app/app.component.css',
+                'src/app/imported-styles.css',
                 'CSS_DEP_REBUILD_STRING {color: #f00;}',
               );
               break;
@@ -455,7 +508,7 @@ describe('Browser Builder rebuilds', () => {
     const run = await architect.scheduleTarget(target, overrides);
     await run.output
       .pipe(
-        debounceTime(1000),
+        debounceTime(rebuildDebounceTime),
         tap(buildEvent => {
           buildNumber += 1;
           switch (buildNumber) {
@@ -486,7 +539,7 @@ describe('Browser Builder rebuilds', () => {
     let buildCount = 1;
     const run = await architect.scheduleTarget(target, overrides);
     await run.output.pipe(
-      debounceTime(1000),
+      debounceTime(rebuildDebounceTime),
       tap(() => {
         const content = virtualFs.fileBufferToString(
           host.scopedSync().read(join(outputPath, 'main.js')),
@@ -516,7 +569,7 @@ describe('Browser Builder rebuilds', () => {
     let buildCount = 1;
     const run = await architect.scheduleTarget(target, overrides);
     await run.output.pipe(
-      debounceTime(1000),
+      debounceTime(rebuildDebounceTime),
       tap(() => {
         const content = virtualFs.fileBufferToString(
           host.scopedSync().read(join(outputPath, 'main.js')),

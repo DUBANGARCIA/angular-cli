@@ -8,7 +8,7 @@ load("@npm_bazel_jasmine//:index.bzl", "jasmine_node_test")
 load("@npm_bazel_typescript//:index.bzl", "ts_library")
 
 # @external_begin
-load("@build_bazel_rules_nodejs//:defs.bzl", "npm_package")
+load("@build_bazel_rules_nodejs//:index.bzl", "pkg_npm")
 # @external_end
 
 licenses(["notice"])
@@ -91,6 +91,7 @@ ts_library(
         "//packages/angular_devkit/core",
         "//packages/angular_devkit/core:node",
         "@npm//@types/node",
+        "@npm//ora",
         "@npm//rxjs",
         "@npm//tslint",
         "@npm//typescript",
@@ -247,7 +248,7 @@ ts_library(
 )
 
 # @external_begin
-npm_package(
+pkg_npm(
     name = "npm_package",
     deps = [
         ":schematics",

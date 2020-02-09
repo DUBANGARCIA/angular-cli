@@ -8,18 +8,22 @@
 
 import { EmptyTree } from '@angular-devkit/schematics';
 import { SchematicTestRunner, UnitTestTree } from '@angular-devkit/schematics/testing';
+import { latestVersions } from '../../utility/latest-versions';
 import { WorkspaceTargets } from '../../utility/workspace-models';
 import { ANY_COMPONENT_STYLE_BUDGET } from './update-workspace-config';
 
 // tslint:disable-next-line: no-any
-function getWorkspaceTargets(tree: UnitTestTree): any {
-  return JSON.parse(tree.readContent(workspacePath))
-    .projects['migration-test'].architect;
+export function getWorkspaceTargets(tree: UnitTestTree, project = 'migration-test'): any {
+  return JSON.parse(tree.readContent(workspacePath)).projects[project].architect;
 }
 
-function updateWorkspaceTargets(tree: UnitTestTree, workspaceTargets: WorkspaceTargets) {
+export function updateWorkspaceTargets(
+  tree: UnitTestTree,
+  workspaceTargets: WorkspaceTargets,
+  project = 'migration-test',
+) {
   const config = JSON.parse(tree.readContent(workspacePath));
-  config.projects['migration-test'].architect = workspaceTargets;
+  config.projects[project].architect = workspaceTargets;
   tree.overwrite(workspacePath, JSON.stringify(config, undefined, 2));
 }
 
@@ -86,7 +90,7 @@ describe('Migration to version 9', () => {
         config.build.configurations.production.scripts = scriptsWithLazy;
 
         updateWorkspaceTargets(tree, config);
-        const tree2 = await schematicRunner.runSchematicAsync('migration-09', {}, tree.branch()).toPromise();
+        const tree2 = await schematicRunner.runSchematicAsync('workspace-version-9', {}, tree.branch()).toPromise();
         config = getWorkspaceTargets(tree2).build;
         expect(config.options.scripts).toEqual(scriptsExpectWithLazy);
         expect(config.configurations.production.scripts).toEqual(scriptsExpectWithLazy);
@@ -98,7 +102,7 @@ describe('Migration to version 9', () => {
         config.build.configurations.production.styles = stylesWithLazy;
 
         updateWorkspaceTargets(tree, config);
-        const tree2 = await schematicRunner.runSchematicAsync('migration-09', {}, tree.branch()).toPromise();
+        const tree2 = await schematicRunner.runSchematicAsync('workspace-version-9', {}, tree.branch()).toPromise();
         config = getWorkspaceTargets(tree2).build;
         expect(config.options.styles).toEqual(stylesExpectWithLazy);
         expect(config.configurations.production.styles).toEqual(stylesExpectWithLazy);
@@ -110,7 +114,7 @@ describe('Migration to version 9', () => {
         config.test.configurations = { production: { scripts: scriptsWithLazy } };
 
         updateWorkspaceTargets(tree, config);
-        const tree2 = await schematicRunner.runSchematicAsync('migration-09', {}, tree.branch()).toPromise();
+        const tree2 = await schematicRunner.runSchematicAsync('workspace-version-9', {}, tree.branch()).toPromise();
         config = getWorkspaceTargets(tree2).test;
         expect(config.options.scripts).toEqual(scriptsExpectWithLazy);
         expect(config.configurations.production.scripts).toEqual(scriptsExpectWithLazy);
@@ -122,7 +126,7 @@ describe('Migration to version 9', () => {
         config.test.configurations = { production: { styles: stylesWithLazy } };
 
         updateWorkspaceTargets(tree, config);
-        const tree2 = await schematicRunner.runSchematicAsync('migration-09', {}, tree.branch()).toPromise();
+        const tree2 = await schematicRunner.runSchematicAsync('workspace-version-9', {}, tree.branch()).toPromise();
         config = getWorkspaceTargets(tree2).test;
         expect(config.options.styles).toEqual(stylesExpectWithLazy);
         expect(config.configurations.production.styles).toEqual(stylesExpectWithLazy);
@@ -140,7 +144,7 @@ describe('Migration to version 9', () => {
         config.build.configurations.production.budgets = defaultBudget;
         updateWorkspaceTargets(tree, config);
 
-        const tree2 = await schematicRunner.runSchematicAsync('migration-09', {}, tree.branch()).toPromise();
+        const tree2 = await schematicRunner.runSchematicAsync('workspace-version-9', {}, tree.branch()).toPromise();
         config = getWorkspaceTargets(tree2).build;
         expect(config.configurations.production.budgets).toEqual(defaultBudget);
       });
@@ -151,7 +155,7 @@ describe('Migration to version 9', () => {
         config.build.configurations.production.budgets = defaultBudget;
         updateWorkspaceTargets(tree, config);
 
-        const tree2 = await schematicRunner.runSchematicAsync('migration-09', {}, tree.branch()).toPromise();
+        const tree2 = await schematicRunner.runSchematicAsync('workspace-version-9', {}, tree.branch()).toPromise();
         config = getWorkspaceTargets(tree2).build;
         expect(config.configurations.production.budgets).toEqual([
           ...defaultBudget,
@@ -164,7 +168,7 @@ describe('Migration to version 9', () => {
         config.build.configurations.production.budgets = undefined;
         updateWorkspaceTargets(tree, config);
 
-        const tree2 = await schematicRunner.runSchematicAsync('migration-09', {}, tree.branch()).toPromise();
+        const tree2 = await schematicRunner.runSchematicAsync('workspace-version-9', {}, tree.branch()).toPromise();
         config = getWorkspaceTargets(tree2).build;
         expect(config.configurations.production.budgets).toEqual([ANY_COMPONENT_STYLE_BUDGET]);
       });
@@ -176,7 +180,7 @@ describe('Migration to version 9', () => {
         config.build.options.aot = false;
         updateWorkspaceTargets(tree, config);
 
-        const tree2 = await schematicRunner.runSchematicAsync('migration-09', {}, tree.branch()).toPromise();
+        const tree2 = await schematicRunner.runSchematicAsync('workspace-version-9', {}, tree.branch()).toPromise();
         config = getWorkspaceTargets(tree2).build;
         expect(config.options.aot).toBe(true);
       });
@@ -186,7 +190,7 @@ describe('Migration to version 9', () => {
         config.build.options.aot = undefined;
         updateWorkspaceTargets(tree, config);
 
-        const tree2 = await schematicRunner.runSchematicAsync('migration-09', {}, tree.branch()).toPromise();
+        const tree2 = await schematicRunner.runSchematicAsync('workspace-version-9', {}, tree.branch()).toPromise();
         config = getWorkspaceTargets(tree2).build;
         expect(config.options.aot).toBe(true);
       });
@@ -209,7 +213,7 @@ describe('Migration to version 9', () => {
         config.build.options.aot = false;
         updateWorkspaceTargets(tree, config);
 
-        const tree2 = await schematicRunner.runSchematicAsync('migration-09', {}, tree.branch()).toPromise();
+        const tree2 = await schematicRunner.runSchematicAsync('workspace-version-9', {}, tree.branch()).toPromise();
         config = getWorkspaceTargets(tree2).build;
         expect(config.options.aot).toBe(false);
       });
@@ -231,7 +235,7 @@ describe('Migration to version 9', () => {
         config.build.options.aot = false;
         updateWorkspaceTargets(tree, config);
 
-        const tree2 = await schematicRunner.runSchematicAsync('migration-09', {}, tree.branch()).toPromise();
+        const tree2 = await schematicRunner.runSchematicAsync('workspace-version-9', {}, tree.branch()).toPromise();
         config = getWorkspaceTargets(tree2).build;
         expect(config.options.aot).toBe(false);
       });
@@ -242,7 +246,7 @@ describe('Migration to version 9', () => {
         config.build.configurations.production.aot = true;
         updateWorkspaceTargets(tree, config);
 
-        const tree2 = await schematicRunner.runSchematicAsync('migration-09', {}, tree.branch()).toPromise();
+        const tree2 = await schematicRunner.runSchematicAsync('workspace-version-9', {}, tree.branch()).toPromise();
         config = getWorkspaceTargets(tree2).build;
         expect(config.options.aot).toBe(true);
         expect(config.configurations.production.aot).toBeUndefined();
@@ -268,7 +272,7 @@ describe('Migration to version 9', () => {
         config.server.configurations.production.optimization = undefined;
         updateWorkspaceTargets(tree, config);
 
-        const tree2 = await schematicRunner.runSchematicAsync('migration-09', {}, tree.branch()).toPromise();
+        const tree2 = await schematicRunner.runSchematicAsync('workspace-version-9', {}, tree.branch()).toPromise();
         config = getWorkspaceTargets(tree2).server.configurations;
         expect(config.production.optimization).toBe(true);
       });
@@ -278,7 +282,7 @@ describe('Migration to version 9', () => {
         config.server.configurations.production.optimization = false;
         updateWorkspaceTargets(tree, config);
 
-        const tree2 = await schematicRunner.runSchematicAsync('migration-09', {}, tree.branch()).toPromise();
+        const tree2 = await schematicRunner.runSchematicAsync('workspace-version-9', {}, tree.branch()).toPromise();
         config = getWorkspaceTargets(tree2).server.configurations;
         expect(config.production.optimization).toBe(true);
       });
@@ -291,81 +295,11 @@ describe('Migration to version 9', () => {
         };
         updateWorkspaceTargets(tree, config);
 
-        const tree2 = await schematicRunner.runSchematicAsync('migration-09', {}, tree.branch()).toPromise();
+        const tree2 = await schematicRunner.runSchematicAsync('workspace-version-9', {}, tree.branch()).toPromise();
         config = getWorkspaceTargets(tree2).server.configurations;
         expect(config.production.optimization).toBe(true);
       });
     });
 
-    describe('i18n configuration', () => {
-      function getI18NConfig(localId: string): object {
-        return {
-          outputPath: `dist/my-project-${localId}/`,
-          i18nFile: `src/locale/messages.${localId}.xlf`,
-          i18nFormat: 'xlf',
-          i18nLocale: localId,
-        };
-      }
-
-      describe('when i18n builder options are set', () => {
-        it(`should add 'localize' option in configuration`, async () => {
-          let config = getWorkspaceTargets(tree);
-          config.build.options.aot = false;
-          config.build.options = getI18NConfig('fr');
-          config.build.configurations.de = getI18NConfig('de');
-          updateWorkspaceTargets(tree, config);
-
-          const tree2 = await schematicRunner.runSchematicAsync('migration-09', {}, tree.branch()).toPromise();
-          config = getWorkspaceTargets(tree2).build;
-          expect(config.options.localize).toEqual(['fr']);
-          expect(config.configurations.de.localize).toEqual(['de']);
-        });
-
-        it(`should add i18n 'sourceLocale' project config when 'extract-i18n' 'i18nLocale' is defined`, async () => {
-          const config = getWorkspaceTargets(tree);
-          config.build.options.aot = false;
-          config.build.options = getI18NConfig('fr');
-          config['extract-i18n'].options.i18nLocale = 'en-GB';
-          config.build.configurations.de = getI18NConfig('de');
-          updateWorkspaceTargets(tree, config);
-
-          const tree2 = await schematicRunner.runSchematicAsync('migration-09', {}, tree.branch()).toPromise();
-          const projectConfig = JSON.parse(tree2.readContent(workspacePath)).projects['migration-test'];
-          expect(projectConfig.i18n.sourceLocale).toBe('en-GB');
-          expect(projectConfig.i18n.locales).toBeDefined();
-        });
-
-        it(`should add i18n 'locales' project config`, async () => {
-          const config = getWorkspaceTargets(tree);
-          config.build.options.aot = false;
-          config.build.options = getI18NConfig('fr');
-          config.build.configurations.de = getI18NConfig('de');
-          updateWorkspaceTargets(tree, config);
-
-          const tree2 = await schematicRunner.runSchematicAsync('migration-09', {}, tree.branch()).toPromise();
-          const projectConfig = JSON.parse(tree2.readContent(workspacePath)).projects['migration-test'];
-          expect(projectConfig.i18n.sourceLocale).toBeUndefined();
-          expect(projectConfig.i18n.locales).toEqual({
-            de: 'src/locale/messages.de.xlf',
-            fr: 'src/locale/messages.fr.xlf',
-          });
-        });
-      });
-
-      describe('when i18n builder options are not set', () => {
-        it(`should not add 'localize' option`, async () => {
-          const tree2 = await schematicRunner.runSchematicAsync('migration-09', {}, tree.branch()).toPromise();
-          const config = getWorkspaceTargets(tree2).build;
-          expect(config.options.localize).toBeUndefined();
-          expect(config.configurations.production.localize).toBeUndefined();
-        });
-
-        it('should not add i18n project config', async () => {
-          const tree2 = await schematicRunner.runSchematicAsync('migration-09', {}, tree.branch()).toPromise();
-          const projectConfig = JSON.parse(tree2.readContent(workspacePath)).projects['migration-test'];
-          expect(projectConfig.i18n).toBeUndefined();
-        });
-      });
-    });
   });
 });
